@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import ProfileSettings from "./pages/ProfileSettings";
 import Payroll from "./pages/Payroll";
 import TaxGST from "./pages/TaxGST";
 
@@ -25,6 +26,8 @@ import AutomationInvoice from "./pages/AutomationInvoice";
 import PublicInvoiceView from "./pages/PublicInvoiceView";
 import PublicPurchaseInvoiceView from "./pages/PublicPurchaseInvoiceView";
 import ServerIssues from "./pages/ServerIssues";
+import AiAccountingExplained from "./pages/AiAccountingExplained";
+import ThankYou from "./pages/ThankYou";
 
 
 
@@ -41,7 +44,8 @@ const App = () => {
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Index />} />
+            <Route path="/" element={<AiAccountingExplained />} />
+            <Route path="/ai-accounting-software" element={<Index />} />
 
             {/* Maintenance Mode Gates */}
             <Route
@@ -52,6 +56,11 @@ const App = () => {
             <Route
               path="/dashboard"
               element={isMaintenanceMode ? <ServerIssues /> : <Dashboard />}
+            />
+
+            <Route
+              path="/profile"
+              element={isMaintenanceMode ? <ServerIssues /> : <ProfileSettings />}
             />
 
             <Route path="/payroll" element={isMaintenanceMode ? <ServerIssues /> : <Payroll />} />
@@ -70,6 +79,7 @@ const App = () => {
             <Route path="/invoice/ocr" element={isMaintenanceMode ? <ServerIssues /> : <AutomationInvoice />} />
             <Route path="/invoice/view/:id" element={<PublicInvoiceView />} />
             <Route path="/purchase-invoice/view/:id" element={<PublicPurchaseInvoiceView />} />
+            <Route path="/thank-you" element={<ThankYou />} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>
