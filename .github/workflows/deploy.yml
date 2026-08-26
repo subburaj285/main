@@ -158,6 +158,14 @@ jobs:
             echo "✅ Build completed successfully!"
           ENDSSH
 
+      - name: 🔍 Diagnose Nginx Configuration
+        run: |
+          ssh root@${{ secrets.SERVER_IP }} << 'ENDSSH'
+            echo "=== Nginx Configuration ==="
+            cat /etc/nginx/sites-enabled/* || cat /etc/nginx/nginx.conf || true
+            echo "=== End Nginx Configuration ==="
+          ENDSSH
+
       - name: ♻ Reload Nginx
         run: |
           ssh root@${{ secrets.SERVER_IP }} << 'ENDSSH'
