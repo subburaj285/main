@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import jwt from "jsonwebtoken";
+import { upsertAutomatedBookkeepingEntry, removeAutomatedBookkeepingEntry } from "../utils/bookkeepingHelper.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,6 +203,20 @@ router.post("/create", verifyTokenOptional, async (req, res) => {
 
     const newInvoice = new Invoice(invoiceData);
     await newInvoice.save();
+
+    // Automatically generate Bookkeeping Entry for sales invoice
+    const invUserId = newInvoice.userId || req.user?.id;
+    if (invUserId && invUserId !== "000000000000000000000000") {
+      await upsertAutomatedBookkeepingEntry({
+        userId: invUserId,
+        date: newInvoice.invoiceDate || new Date(),
+        description: `Sales Invoice ${newInvoice.invoiceNumber} to ${newInvoice.customerName}`,
+        category: "Sales",
+        amount: newInvoice.grandTotal,
+        type: "income",
+        referenceId: `invoice_${newInvoice._id}`
+      });
+    }
 
     res.status(201).json({
       message: "Invoice created successfully!",
@@ -528,6 +543,27 @@ router.put("/:id", async (req, res) => {
       });
     }
 
+    // Sync automated Bookkeeping Entry
+    const invUserId = updatedInvoice.userId || req.user?.id;
+    if (invUserId && invUserId !== "000000000000000000000000") {
+      if (updatedInvoice.status === 'cancelled' || updatedInvoice.isDeleted) {
+        await removeAutomatedBookkeepingEntry({
+          userId: invUserId,
+          referenceId: `invoice_${updatedInvoice._id}`
+        });
+      } else {
+        await upsertAutomatedBookkeepingEntry({
+          userId: invUserId,
+          date: updatedInvoice.invoiceDate || new Date(),
+          description: `Sales Invoice ${updatedInvoice.invoiceNumber} to ${updatedInvoice.customerName}`,
+          category: "Sales",
+          amount: updatedInvoice.grandTotal,
+          type: "income",
+          referenceId: `invoice_${updatedInvoice._id}`
+        });
+      }
+    }
+
     res.json({
       message: "Invoice updated successfully!",
       invoice: updatedInvoice
@@ -567,6 +603,15 @@ router.delete("/:id", async (req, res) => {
     if (!deletedInvoice) {
       return res.status(404).json({
         message: "Invoice not found"
+      });
+    }
+
+    // Remove automated Bookkeeping Entry
+    const invUserId = deletedInvoice.userId || req.user?.id;
+    if (invUserId) {
+      await removeAutomatedBookkeepingEntry({
+        userId: invUserId,
+        referenceId: `invoice_${deletedInvoice._id}`
       });
     }
 

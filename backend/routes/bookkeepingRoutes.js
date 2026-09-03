@@ -25,8 +25,15 @@ const verifyToken = (req, res, next) => {
     }
 };
 
-// ✅ POST route to add bookkeeping entry
+// ❌ POST route to add bookkeeping entry - BLOCKED for direct manual inputs
 router.post("/add", verifyToken, async (req, res) => {
+    // Check if this is a direct manual user entry attempt
+    if (!req.body.isAutomated) {
+        return res.status(403).json({
+            message: "Direct manual bookkeeping transaction creation is disabled. Financial transactions must originate from Inventory or Invoice modules."
+        });
+    }
+
     try {
         const { date, description, type, amount, category, referenceId, isAutomated } = req.body;
         const entryType = (type && (type.toString().toLowerCase() === "income")) ? "income" : "expense";

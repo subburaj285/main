@@ -63,3 +63,85 @@ export const sendResetEmail = async (email, resetUrl) => {
   await transporter.sendMail(mailOptions);
   return { success: true };
 };
+
+/**
+ * Sends a website lead notification email to shreeandal.ai@gmail.com.
+ * Falls back to console printing if SMTP configuration is not present.
+ * 
+ * @param {Object} lead - Lead information
+ * @param {string} lead.fullName - Full name of the lead
+ * @param {string} lead.email - Email address of the lead
+ * @param {string} lead.phone - Phone number of the lead
+ * @param {string} [lead.business] - Business description (optional)
+ */
+export const sendLeadEmail = async ({ fullName, email, phone, business }) => {
+  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587");
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const smtpFrom = process.env.SMTP_FROM || smtpUser || "shreeandal.ai@gmail.com";
+  const targetRecipient = "shreeandal.ai@gmail.com";
+
+  const plainTextBody = `New Website Lead\n\nName: ${fullName}\nEmail: ${email}\nPhone: ${phone}\nBusiness: ${business || "N/A"}`;
+
+  if (!smtpUser || !smtpPass) {
+    console.log("\n=========================================");
+    console.log(`📧 NEW WEBSITE LEAD NOTIFICATION FOR: ${targetRecipient}`);
+    console.log(`👤 Name: ${fullName}`);
+    console.log(`✉️ Email: ${email}`);
+    console.log(`📞 Phone: ${phone}`);
+    console.log(`🏢 Business: ${business || "N/A"}`);
+    console.log("=========================================\n");
+    console.warn("⚠️ SMTP credentials not configured in backend/.env. Lead notification printed to console above.");
+    return { success: true, printedToConsole: true };
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  const mailOptions = {
+    from: `"SHREE ANDAL AI Lead Desk" <${smtpFrom}>`,
+    to: targetRecipient,
+    subject: `New Website Lead - ${fullName}`,
+    text: plainTextBody,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+        <div style="border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 20px;">
+          <h2 style="color: #0f172a; margin: 0; font-size: 22px; font-weight: 700;">New Website Lead</h2>
+        </div>
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 10px 0; color: #64748b; font-weight: 600; width: 100px;">Name:</td>
+            <td style="padding: 10px 0; color: #0f172a; font-weight: 600;">${fullName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Email:</td>
+            <td style="padding: 10px 0; color: #2563eb; font-weight: 600;"><a href="mailto:${email}" style="color: #2563eb; text-decoration: none;">${email}</a></td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Phone:</td>
+            <td style="padding: 10px 0; color: #0f172a; font-weight: 600;">${phone}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 0; color: #64748b; font-weight: 600; vertical-align: top;">Business:</td>
+            <td style="padding: 10px 0; color: #334155; line-height: 1.5;">${business ? business.replace(/\n/g, '<br/>') : "N/A"}</td>
+          </tr>
+        </table>
+        <div style="margin-top: 25px; padding-top: 15px; border-top: 1px solid #f1f5f9; color: #94a3b8; font-size: 12px;">
+          Submitted via SHREE ANDAL AI Website Trial/Demo Form.
+        </div>
+      </div>
+    `,
+  };
+
+  await transporter.sendMail(mailOptions);
+  return { success: true };
+};
+
