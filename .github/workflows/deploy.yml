@@ -158,6 +158,24 @@ jobs:
             echo "✅ Build completed successfully!"
           ENDSSH
 
+      - name: 🔍 Diagnose Nginx Configuration
+        run: |
+          ssh root@${{ secrets.SERVER_IP }} << 'ENDSSH'
+            echo "=== Nginx Configuration ==="
+            cat /etc/nginx/sites-enabled/* || cat /etc/nginx/nginx.conf || true
+            echo "=== End Nginx Configuration ==="
+            
+            echo "=== Git Remote and Log ==="
+            cd /root/financial-automation/main
+            git remote -v
+            git log -n 1 --oneline
+            echo "=== End Git info ==="
+            
+            echo "=== Dist Assets List ==="
+            ls -la /root/financial-automation/main/dist/assets/ || true
+            echo "=== End Dist Assets List ==="
+          ENDSSH
+
       - name: ♻ Reload Nginx
         run: |
           ssh root@${{ secrets.SERVER_IP }} << 'ENDSSH'

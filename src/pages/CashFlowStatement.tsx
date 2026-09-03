@@ -5,20 +5,30 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, FileText, Plus, Trash2, TrendingUp, TrendingDown, Minus, Download, Sparkles, BarChart3 } from "lucide-react";
+import { ArrowLeft, Download, TrendingUp, TrendingDown, FileText, BarChart3, Plus, Trash2, Database, DollarSign, Calculator, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { API_BASE_URL } from "@/lib/api";
-interface CashFlowItem {
-  description: string;
-  amount: string;
-  category: string;
-}
+import { Badge } from "@/components/ui/badge";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import { DEFAULT_REPORT_COMPANY_NAME, REPORT_FOOTER_COMPANY, getReportCompanyName, formatPDFCurrency } from "@/lib/reportBranding";
 
 interface CashFlowStatement {
   _id?: string;
+  companyName?: string;
   period: string;
-  inflowItems: CashFlowItem[];
-  outflowItems: CashFlowItem[];
+  sales: number;
+  serviceIncome: number;
+  interestIncome: number;
+  otherIncome: number;
+  costOfMaterials: number;
+  salaries: number;
+  rent: number;
+  utilities: number;
+  financeCost: number;
+  depreciation: number;
+  amortization: number;
+  otherExpenses: number;
   totalInflow: number;
   totalOutflow: number;
   netCashFlow: number;
@@ -31,19 +41,23 @@ const CashFlowStatement = () => {
   const { toast } = useToast();
 
   const [formData, setFormData] = useState({
+    companyName: DEFAULT_REPORT_COMPANY_NAME,
     period: "",
+    sales: "",
+    serviceIncome: "",
+    interestIncome: "",
+    otherIncome: "",
+    costOfMaterials: "",
+    salaries: "",
+    rent: "",
+    utilities: "",
+    financeCost: "",
+    depreciation: "",
+    amortization: "",
+    otherExpenses: "",
   });
 
-  const [inflowItems, setInflowItems] = useState<CashFlowItem[]>([
-    { description: "", amount: "", category: "Revenue" }
-  ]);
-
-  const [outflowItems, setOutflowItems] = useState<CashFlowItem[]>([
-    { description: "", amount: "", category: "Expense" }
-  ]);
-
   const [statements, setStatements] = useState<CashFlowStatement[]>([]);
-  const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     totalInflow: number;
     totalOutflow: number;
@@ -51,7 +65,8 @@ const CashFlowStatement = () => {
     status: string;
   } | null>(null);
 
-  // Fetch existing statements
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
     fetchStatements();
   }, []);
@@ -60,9 +75,7 @@ const CashFlowStatement = () => {
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(`${API_BASE_URL}/cashflow-statement/all`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
         const data = await response.json();
@@ -75,55 +88,101 @@ const CashFlowStatement = () => {
 
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    setResult(null);
   };
 
-  const handleInflowItemChange = (index: number, field: keyof CashFlowItem, value: string) => {
-    const updatedItems = [...inflowItems];
-    updatedItems[index] = { ...updatedItems[index], [field]: value };
-    setInflowItems(updatedItems);
-  };
-
-  const handleOutflowItemChange = (index: number, field: keyof CashFlowItem, value: string) => {
-    const updatedItems = [...outflowItems];
-    updatedItems[index] = { ...updatedItems[index], [field]: value };
-    setOutflowItems(updatedItems);
-  };
-
-  const addInflowItem = () => {
-    setInflowItems([...inflowItems, { description: "", amount: "", category: "Revenue" }]);
-  };
-
-  const addOutflowItem = () => {
-    setOutflowItems([...outflowItems, { description: "", amount: "", category: "Expense" }]);
-  };
-
-  const removeInflowItem = (index: number) => {
-    if (inflowItems.length > 1) {
-      setInflowItems(inflowItems.filter((_, i) => i !== index));
-    }
-  };
-
-  const removeOutflowItem = (index: number) => {
-    if (outflowItems.length > 1) {
-      setOutflowItems(outflowItems.filter((_, i) => i !== index));
-    }
-  };
-
-  const calculateCashFlow = () => {
-    const validInflowItems = inflowItems.filter(item => item.description && item.amount);
-    const validOutflowItems = outflowItems.filter(item => item.description && item.amount);
-
-    if (validInflowItems.length === 0 || validOutflowItems.length === 0) {
+  const autoGenerateCashFlow = async () => {
+    if (!formData.period) {
       toast({
         variant: "destructive",
-        title: "Incomplete Data",
-        description: "Please add at least one inflow and one outflow item with description and amount.",
+        title: "Missing Period",
+        description: "Please enter a period (e.g. July 2026)",
       });
       return;
     }
 
-    const totalInflow = validInflowItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-    const totalOutflow = validOutflowItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/cashflow-statement/generate?companyName=${encodeURIComponent(formData.companyName)}&period=${encodeURIComponent(formData.period)}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setResult({
+          totalInflow: data.totalInflow,
+          totalOutflow: data.totalOutflow,
+          netCashFlow: data.netCashFlow,
+          status: data.status
+        });
+        setFormData({
+          companyName: data.companyName,
+          period: data.period,
+          sales: (data.sales || 0).toString(),
+          serviceIncome: (data.serviceIncome || 0).toString(),
+          interestIncome: (data.interestIncome || 0).toString(),
+          otherIncome: (data.otherIncome || 0).toString(),
+          costOfMaterials: (data.costOfMaterials || 0).toString(),
+          salaries: (data.salaries || 0).toString(),
+          rent: (data.rent || 0).toString(),
+          utilities: (data.utilities || 0).toString(),
+          financeCost: (data.financeCost || 0).toString(),
+          depreciation: (data.depreciation || 0).toString(),
+          amortization: (data.amortization || 0).toString(),
+          otherExpenses: (data.otherExpenses || 0).toString(),
+        });
+        toast({
+          title: "Auto-Generation Complete",
+          description: `Net Cash Flow: ₹${data.netCashFlow.toFixed(2)} (${data.status})`,
+        });
+        fetchStatements();
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: data.message || "Failed to generate dynamic cash flow statement",
+        });
+      }
+    } catch (error) {
+      console.error("Error auto-generating cash flow statement:", error);
+      toast({
+        variant: "destructive",
+        title: "Connection Error",
+        description: "Failed to connect to the server",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calculateCashFlow = async () => {
+    if (!formData.period) {
+      toast({
+        variant: "destructive",
+        title: "Missing Period",
+        description: "Please enter a period",
+      });
+      return;
+    }
+
+    const sales = parseFloat(formData.sales) || 0;
+    const serviceIncome = parseFloat(formData.serviceIncome) || 0;
+    const interestIncome = parseFloat(formData.interestIncome) || 0;
+    const otherIncome = parseFloat(formData.otherIncome) || 0;
+    
+    const costOfMaterials = parseFloat(formData.costOfMaterials) || 0;
+    const salaries = parseFloat(formData.salaries) || 0;
+    const rent = parseFloat(formData.rent) || 0;
+    const utilities = parseFloat(formData.utilities) || 0;
+    const financeCost = parseFloat(formData.financeCost) || 0;
+    const depreciation = parseFloat(formData.depreciation) || 0;
+    const amortization = parseFloat(formData.amortization) || 0;
+    const otherExpenses = parseFloat(formData.otherExpenses) || 0;
+
+    const totalInflow = sales + serviceIncome + interestIncome + otherIncome;
+    const totalOutflow = costOfMaterials + salaries + rent + utilities + financeCost + depreciation + amortization + otherExpenses;
     const netCashFlow = totalInflow - totalOutflow;
 
     let status = "neutral";
@@ -141,33 +200,11 @@ const CashFlowStatement = () => {
       title: "Calculation Complete",
       description: `Net Cash Flow: ₹${netCashFlow.toFixed(2)} (${status})`,
     });
-  };
-
-  const saveStatement = async () => {
-    if (!formData.period) {
-      toast({
-        variant: "destructive",
-        title: "Missing Period",
-        description: "Please enter a period (e.g., January 2024)",
-      });
-      return;
-    }
-
-    const validInflowItems = inflowItems.filter(item => item.description && item.amount);
-    const validOutflowItems = outflowItems.filter(item => item.description && item.amount);
-
-    if (validInflowItems.length === 0 || validOutflowItems.length === 0) {
-      toast({
-        variant: "destructive",
-        title: "Incomplete Data",
-        description: "Please add at least one inflow and one outflow item with description and amount.",
-      });
-      return;
-    }
 
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
+      
       const response = await fetch(`${API_BASE_URL}/cashflow-statement/create`, {
         method: "POST",
         headers: {
@@ -175,42 +212,69 @@ const CashFlowStatement = () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          companyName: getReportCompanyName(formData.companyName),
           period: formData.period,
-          inflowItems: validInflowItems.map(item => ({
-            ...item,
-            amount: parseFloat(item.amount)
-          })),
-          outflowItems: validOutflowItems.map(item => ({
-            ...item,
-            amount: parseFloat(item.amount)
-          }))
+          sales,
+          serviceIncome,
+          interestIncome,
+          otherIncome,
+          costOfMaterials,
+          salaries,
+          rent,
+          utilities,
+          financeCost,
+          depreciation,
+          amortization,
+          otherExpenses,
         }),
       });
 
       if (response.ok) {
         toast({
-          title: "Success!",
-          description: "Cash flow statement saved successfully!",
+          title: "Saved to History",
+          description: "Cash flow statement saved successfully to database!",
         });
-        setFormData({ period: "" });
-        setInflowItems([{ description: "", amount: "", category: "Revenue" }]);
-        setOutflowItems([{ description: "", amount: "", category: "Expense" }]);
-        setResult(null);
+        fetchStatements();
+      } else {
+        const error = await response.json();
+        console.error("Auto-save failed:", error);
+      }
+    } catch (error) {
+      console.error("Error auto-saving statement:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteStatement = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this cash flow statement?")) return;
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/cashflow-statement/delete/${id}`, {
+        method: "DELETE",
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: "Statement deleted successfully!",
+        });
         fetchStatements();
       } else {
         const error = await response.json();
         toast({
           variant: "destructive",
           title: "Error",
-          description: error.message || "Failed to save statement",
+          description: error.message || "Failed to delete statement",
         });
       }
     } catch (error) {
-      console.error("Error saving statement:", error);
+      console.error("Error deleting statement:", error);
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to save statement. Please try again.",
+        description: "Failed to delete statement",
       });
     } finally {
       setLoading(false);
@@ -218,91 +282,199 @@ const CashFlowStatement = () => {
   };
 
   const downloadSlip = (statement?: CashFlowStatement) => {
-    const dataToUse = statement || (result ? {
-      period: formData.period || "Current Statement",
-      inflowItems: inflowItems.filter(item => item.description && item.amount),
-      outflowItems: outflowItems.filter(item => item.description && item.amount),
-      totalInflow: result.totalInflow,
-      totalOutflow: result.totalOutflow,
-      netCashFlow: result.netCashFlow,
-      status: result.status as "positive" | "negative" | "neutral",
-      createdAt: new Date().toISOString()
-    } : null);
+    let dataToUse: any;
 
-    if (!dataToUse) {
-      toast({
-        variant: "destructive",
-        title: "No Data",
-        description: "No data available to download. Please create or calculate a statement first.",
-      });
+    if (!statement && result) {
+      dataToUse = {
+        period: formData.period || "Current Statement",
+        companyName: formData.companyName,
+        sales: parseFloat(formData.sales) || 0,
+        serviceIncome: parseFloat(formData.serviceIncome) || 0,
+        interestIncome: parseFloat(formData.interestIncome) || 0,
+        otherIncome: parseFloat(formData.otherIncome) || 0,
+        costOfMaterials: parseFloat(formData.costOfMaterials) || 0,
+        salaries: parseFloat(formData.salaries) || 0,
+        rent: parseFloat(formData.rent) || 0,
+        utilities: parseFloat(formData.utilities) || 0,
+        financeCost: parseFloat(formData.financeCost) || 0,
+        depreciation: parseFloat(formData.depreciation) || 0,
+        amortization: parseFloat(formData.amortization) || 0,
+        otherExpenses: parseFloat(formData.otherExpenses) || 0,
+        totalInflow: result.totalInflow,
+        totalOutflow: result.totalOutflow,
+        netCashFlow: result.netCashFlow,
+        status: result.status,
+        createdAt: new Date().toISOString()
+      };
+    } else if (statement) {
+      dataToUse = statement;
+    } else {
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageW = doc.internal.pageSize.getWidth();
+      doc.setFillColor(30, 64, 175);
+      doc.rect(0, 0, pageW, 28, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(255, 255, 255);
+      doc.text(getReportCompanyName(formData.companyName), pageW / 2, 10, { align: "center" });
+      doc.setFontSize(16);
+      doc.text("CASH FLOW STATEMENT REPORT", pageW / 2, 20, { align: "center" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+      doc.setTextColor(100, 116, 139);
+      doc.text("No cash flow statement data available for the selected period.", pageW / 2, 50, { align: "center" });
+
+      doc.setFontSize(8);
+      doc.text(`Generated by ${REPORT_FOOTER_COMPANY} | Page 1 of 1`, pageW / 2, doc.internal.pageSize.getHeight() - 12, { align: "center" });
+      doc.save(`CashFlow_Statement_${Date.now()}.pdf`);
       return;
     }
 
-    const slipContent = `
-╔══════════════════════════════════════════════════════════════════════╗
-║                        CASH FLOW STATEMENT                           ║
-║                     ${dataToUse.period.toUpperCase().padEnd(30)}         ║
-╚══════════════════════════════════════════════════════════════════════╝
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 18;
+    const contentW = pageW - margin * 2;
+    let y = 18;
 
-Date: ${new Date(dataToUse.createdAt).toLocaleDateString('en-IN', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    })}
+    // Header block
+    doc.setFillColor(30, 64, 175);
+    doc.rect(0, 0, pageW, 28, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(255, 255, 255);
+    doc.text(getReportCompanyName(dataToUse.companyName || formData.companyName), pageW / 2, 10, { align: "center" });
+    doc.setFontSize(16);
+    doc.text("CASH FLOW STATEMENT", pageW / 2, 20, { align: "center" });
+    y = 36;
 
-────────────────────────────────────────────────────────────────────────
-                            CASH INFLOWS
-────────────────────────────────────────────────────────────────────────
-${dataToUse.inflowItems.map((item, index) =>
-      `${(index + 1).toString().padStart(2)}. ${item.description.padEnd(35)} ${item.category.padEnd(15)} ₹${parseFloat(item.amount).toFixed(2).padStart(12)}`
-    ).join('\n')}
-${' '.repeat(55)}────────────────
-${'TOTAL CASH INFLOW:'.padEnd(52)} ₹${dataToUse.totalInflow.toFixed(2).padStart(12)}
-────────────────────────────────────────────────────────────────────────
-                           CASH OUTFLOWS
-────────────────────────────────────────────────────────────────────────
-${dataToUse.outflowItems.map((item, index) =>
-      `${(index + 1).toString().padStart(2)}. ${item.description.padEnd(35)} ${item.category.padEnd(15)} ₹${parseFloat(item.amount).toFixed(2).padStart(12)}`
-    ).join('\n')}
-${' '.repeat(55)}────────────────
-${'TOTAL CASH OUTFLOW:'.padEnd(52)} ₹${dataToUse.totalOutflow.toFixed(2).padStart(12)}
-────────────────────────────────────────────────────────────────────────
-                            SUMMARY
-────────────────────────────────────────────────────────────────────────
-Total Cash Inflow:        ₹${dataToUse.totalInflow.toFixed(2).padStart(12)}
-Total Cash Outflow:       ₹${dataToUse.totalOutflow.toFixed(2).padStart(12)}
-────────────────────────────────────────────────────────────────────────
-NET CASH FLOW:            ₹${dataToUse.netCashFlow.toFixed(2).padStart(12)}
+    // Subtitle / Period
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Period: ${dataToUse.period}`, pageW / 2, y, { align: "center" });
+    y += 5;
+    doc.text(`Date: ${new Date(dataToUse.createdAt).toLocaleDateString('en-IN')}`, pageW / 2, y, { align: "center" });
+    y += 10;
 
-STATUS: ${dataToUse.status === 'positive' ? '🟢 POSITIVE CASH FLOW' :
-        dataToUse.status === 'negative' ? '🔴 NEGATIVE CASH FLOW' :
-          '🟡 BALANCED CASH FLOW'}
+    // Inflow rows
+    const inflowRows = [
+      ["1", "Sales", formatPDFCurrency(dataToUse.sales || 0, "Rs. ")],
+      ["2", "Service Income", formatPDFCurrency(dataToUse.serviceIncome || 0, "Rs. ")],
+      ["3", "Interest Income", formatPDFCurrency(dataToUse.interestIncome || 0, "Rs. ")],
+      ["4", "Other Income", formatPDFCurrency(dataToUse.otherIncome || 0, "Rs. ")]
+    ];
 
-${dataToUse.status === 'positive' ?
-        '✓ Healthy cash position. Consider investment opportunities.' :
-        dataToUse.status === 'negative' ?
-          '⚠️  Monitor expenses closely. Consider cost optimization.' :
-          '⚖️  Cash flow is balanced. Maintain current operations.'}
+    // Outflow rows
+    const outflowRows = [
+      ["1", "Cost of Materials", formatPDFCurrency(dataToUse.costOfMaterials || 0, "Rs. ")],
+      ["2", "Salaries", formatPDFCurrency(dataToUse.salaries || 0, "Rs. ")],
+      ["3", "Rent", formatPDFCurrency(dataToUse.rent || 0, "Rs. ")],
+      ["4", "Utilities", formatPDFCurrency(dataToUse.utilities || 0, "Rs. ")],
+      ["5", "Finance Cost", formatPDFCurrency(dataToUse.financeCost || 0, "Rs. ")],
+      ["6", "Depreciation", formatPDFCurrency(dataToUse.depreciation || 0, "Rs. ")],
+      ["7", "Amortization", formatPDFCurrency(dataToUse.amortization || 0, "Rs. ")],
+      ["8", "Other Expenses", formatPDFCurrency(dataToUse.otherExpenses || 0, "Rs. ")]
+    ];
 
-────────────────────────────────────────────────────────────────────────
-Generated: ${new Date().toLocaleString('en-IN')}
-Powered by SHREE ANDAL AI SOFTWARE SOLUTIONS (OPC) PRIVATE LIMITED
-    `.trim();
+    // 1. Draw Inflows Table
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(21, 128, 61); // green-700
+    doc.text("CASH INFLOWS", margin, y);
+    y += 4;
 
-    const blob = new Blob([slipContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `CashFlow_Statement_${dataToUse.period.replace(/\s+/g, '_')}_${new Date().getTime()}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    autoTable(doc, {
+      startY: y,
+      head: [["#", "Category", "Amount"]],
+      body: inflowRows,
+      theme: "grid",
+      headStyles: { fillColor: [22, 163, 74] }, // green-600
+      margin: { left: margin, right: margin },
+      foot: [["", "Total Cash Inflow", formatPDFCurrency(dataToUse.totalInflow || 0, "Rs. ")]],
+      footStyles: { fillColor: [240, 253, 244], textColor: [21, 128, 61], fontStyle: "bold" }
+    });
+
+    y = (doc as any).lastAutoTable.finalY + 10;
+
+    // 2. Draw Outflows Table
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(194, 65, 12); // orange-700
+    doc.text("CASH OUTFLOWS", margin, y);
+    y += 4;
+
+    autoTable(doc, {
+      startY: y,
+      head: [["#", "Category", "Amount"]],
+      body: outflowRows,
+      theme: "grid",
+      headStyles: { fillColor: [220, 38, 38] }, // red-600
+      margin: { left: margin, right: margin },
+      foot: [["", "Total Cash Outflow", formatPDFCurrency(dataToUse.totalOutflow || 0, "Rs. ")]],
+      footStyles: { fillColor: [254, 242, 242], textColor: [194, 65, 12], fontStyle: "bold" }
+    });
+
+    y = (doc as any).lastAutoTable.finalY + 12;
+
+    // Summary Section
+    doc.setFillColor(15, 23, 42);
+    doc.roundedRect(margin, y, contentW, 12, 3, 3, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text("Net Cash Flow", margin + 5, y + 8);
+    doc.setTextColor(147, 197, 253);
+    doc.text(formatPDFCurrency(dataToUse.netCashFlow || 0, "Rs. "), margin + contentW - 5, y + 8, { align: "right" });
+    y += 18;
+
+    // Status box
+    const status = dataToUse.status;
+    const isPositive = status === 'positive';
+    const isNegative = status === 'negative';
+
+    doc.setFillColor(...(isPositive ? ([240, 253, 244] as [number,number,number]) : isNegative ? ([254, 242, 242] as [number,number,number]) : ([248, 250, 252] as [number,number,number])));
+    doc.setDrawColor(...(isPositive ? ([22, 163, 74] as [number,number,number]) : isNegative ? ([220, 38, 38] as [number,number,number]) : ([148, 163, 184] as [number,number,number])));
+    doc.setLineWidth(0.8);
+    doc.roundedRect(margin, y, contentW, 18, 3, 3, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(...(isPositive ? ([22, 163, 74] as [number,number,number]) : isNegative ? ([220, 38, 38] as [number,number,number]) : ([71, 85, 105] as [number,number,number])));
+    
+    const statusText = isPositive ? "POSITIVE CASH FLOW" : isNegative ? "NEGATIVE CASH FLOW" : "BALANCED CASH FLOW";
+    doc.text(statusText, pageW / 2, y + 7, { align: "center" });
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    const adviceText = isPositive 
+      ? "Healthy cash position. Consider investment opportunities." 
+      : isNegative 
+        ? "Monitor expenses closely. Consider cost optimization." 
+        : "Cash flow is balanced. Maintain current operations.";
+    doc.text(adviceText, pageW / 2, y + 13, { align: "center" });
+    y += 26;
+
+    // Footer
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.4);
+    doc.line(margin, y, margin + contentW, y);
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Generated by ${REPORT_FOOTER_COMPANY} | Financial Analytics Engine`,
+      pageW / 2,
+      y,
+      { align: "center" }
+    );
+
+    doc.save(`CashFlow_Statement_${dataToUse.period.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
 
     toast({
-      title: "Download Started",
-      description: "Cash flow statement downloaded successfully!",
+      title: "PDF Saved",
+      description: "Cash flow statement PDF downloaded successfully!",
     });
   };
 
@@ -310,371 +482,278 @@ Powered by SHREE ANDAL AI SOFTWARE SOLUTIONS (OPC) PRIVATE LIMITED
     navigate("/dashboard");
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "positive": return <TrendingUp className="h-5 w-5 text-green-500" />;
-      case "negative": return <TrendingDown className="h-5 w-5 text-red-500" />;
-      default: return <Minus className="h-5 w-5 text-gray-500" />;
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "positive": return "text-green-400";
-      case "negative": return "text-red-400";
-      default: return "text-gray-400";
-    }
-  };
-
-  const getStatusBgColor = (status: string) => {
-    switch (status) {
-      case "positive": return "bg-green-500/20 border-green-400/30";
-      case "negative": return "bg-red-500/20 border-red-400/30";
-      default: return "bg-gray-500/20 border-gray-400/30";
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 text-white">
-      <header className="relative backdrop-blur-xl bg-white/5 border-b border-blue-400/20 shadow-2xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <Button
-            variant="ghost"
-            onClick={handleBackToDashboard}
-            className="mb-4 text-blue-200 hover:text-blue-100 hover:bg-white/10 backdrop-blur-md transition-all duration-300 hover:-translate-x-1"
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Dashboard
-          </Button>
+    <div className="liquid-page min-h-screen overflow-hidden text-slate-950">
+      <div className="liquid-backdrop fixed inset-0 pointer-events-none" />
+
+      {/* Header */}
+      <header className="sticky top-0 z-20 border-b border-white/40 bg-white/24 backdrop-blur-2xl">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-center justify-between mb-4">
+            <Button
+              variant="ghost"
+              onClick={handleBackToDashboard}
+              className="rounded-full border border-white/60 bg-white/45 text-slate-700 hover:bg-white/70 hover:text-slate-950"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Dashboard
+            </Button>
+          </div>
+
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-2xl backdrop-blur-xl border border-blue-400/30">
-              <BarChart3 className="h-8 w-8 text-blue-400" />
+            <div className="liquid-icon flex h-16 w-16 items-center justify-center rounded-[22px]">
+              <BarChart3 className="h-8 w-8 text-slate-900" />
             </div>
             <div>
-              <h1 className="text-4xl font-black bg-gradient-to-r from-blue-400 via-cyan-400 to-indigo-400 bg-clip-text text-transparent">
+              <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
                 Cash Flow Statement
               </h1>
-              <p className="text-blue-200/80 font-medium mt-1">
-                Track your cash inflows and outflows with professional reporting
+              <p className="mt-1 text-slate-600 font-medium">
+                Generate and track financial cash flows
               </p>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <main className="relative z-10 mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <Card className="backdrop-blur-2xl bg-white/10 border border-blue-400/20 shadow-2xl shadow-blue-500/20 rounded-3xl overflow-hidden">
-            <CardHeader>
-              <CardTitle className="text-2xl font-black text-blue-100 flex items-center gap-3">
-                <FileText className="h-6 w-6 text-cyan-400" />
-                Create Cash Flow Statement
+          {/* Inputs Section */}
+          <Card className="liquid-panel overflow-hidden rounded-[36px] border-white/55 transition-all duration-500 bg-white/40">
+            <div className="absolute left-1/2 top-0 h-32 w-96 -translate-x-1/2 bg-gradient-to-b from-sky-200/60 to-transparent blur-2xl" />
+
+            <CardHeader className="relative">
+              <CardTitle className="text-2xl font-bold text-slate-950 flex items-center gap-3">
+                <FileText className="h-6 w-6 text-sky-700" />
+                Enter Cash Flow Data
               </CardTitle>
-              <CardDescription className="text-blue-200/70">
-                Enter your cash inflows and outflows for a specific period
+              <CardDescription className="text-slate-600 mt-1">
+                Input your company's inflow and outflow details
               </CardDescription>
             </CardHeader>
 
             <CardContent className="space-y-6 p-8">
-              <div className="space-y-3">
-                <Label className="text-blue-100 font-bold flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-cyan-400" />
-                  Period
-                </Label>
-                <div className="flex items-center gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5 rounded-[24px] bg-white/60 border border-white/80 shadow-sm">
+                <div className="space-y-2">
+                  <Label htmlFor="companyName" className="text-slate-700 font-semibold">Enter Your Company Name</Label>
                   <Input
-                    placeholder="e.g., January 2024, Q1 2024"
-                    value={formData.period}
-                    onChange={(e) => handleInputChange("period", e.target.value)}
-                    className="bg-white/5 backdrop-blur-xl text-blue-100 border border-blue-400/30 rounded-xl h-12 placeholder:text-blue-300/40 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30 transition-all duration-300"
+                    id="companyName"
+                    type="text"
+                    placeholder="Enter your company name"
+                    value={formData.companyName}
+                    onChange={(e) => handleInputChange("companyName", e.target.value)}
+                    className="h-12 rounded-[18px] border-slate-200 bg-white/80 text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:ring-0"
                   />
-                  <VoiceButton
-                    onTranscript={(text) => handleInputChange("period", text)}
-                    onClear={() => handleInputChange("period", "")}
-                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="period" className="text-slate-700 font-semibold">Period</Label>
+                  <div className="relative flex items-center gap-2">
+                    <Input
+                      id="period"
+                      type="text"
+                      placeholder="e.g., Q1 2026 or February 2026"
+                      value={formData.period}
+                      onChange={(e) => handleInputChange("period", e.target.value)}
+                      className="h-12 rounded-[18px] border-slate-200 bg-white/80 text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:ring-0"
+                    />
+                    <VoiceButton
+                      onTranscript={(text) => handleInputChange("period", text)}
+                      onClear={() => handleInputChange("period", "")}
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label className="text-blue-100 font-bold text-lg flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5 text-green-400" />
-                    Cash Inflows
-                  </Label>
-                  <Button
-                    onClick={addInflowItem}
-                    className="bg-green-600 hover:bg-green-700 text-white border-green-500/30"
-                    size="sm"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add Item
-                  </Button>
-                </div>
-
-                {inflowItems.map((item, index) => (
-                  <div key={index} className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-4 flex items-center gap-1">
+              {/* Inflow Section */}
+              <div className="space-y-4 p-6 rounded-[28px] bg-white/60 border border-white/80 shadow-sm backdrop-blur-xl">
+                <h3 className="text-lg font-bold text-slate-900 border-b border-slate-100 pb-2">💰 Cash Inflows</h3>
+                {[
+                  { field: "sales", label: "Sales", icon: "📊" },
+                  { field: "serviceIncome", label: "Service Income", icon: "🔧" },
+                  { field: "interestIncome", label: "Interest Income", icon: "📈" },
+                  { field: "otherIncome", label: "Other Income", icon: "💰" },
+                ].map(({ field, label, icon }) => (
+                  <div key={field} className="space-y-2">
+                    <Label htmlFor={field} className="text-slate-700 font-semibold flex items-center gap-2">
+                      <span>{icon}</span> {label} (₹)
+                    </Label>
+                    <div className="flex items-center gap-2">
                       <Input
-                        placeholder="Description"
-                        value={item.description}
-                        onChange={(e) => handleInflowItemChange(index, 'description', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-green-400 focus:ring-2 focus:ring-green-400/30 transition-all duration-300"
-                      />
-                      <VoiceButton
-                        onTranscript={(text) => handleInflowItemChange(index, 'description', text)}
-                        onClear={() => handleInflowItemChange(index, 'description', "")}
-                      />
-                    </div>
-                    <div className="col-span-3 flex items-center gap-1">
-                      <Input
+                        id={field}
                         type="number"
-                        placeholder="Amount"
-                        value={item.amount}
-                        onChange={(e) => handleInflowItemChange(index, 'amount', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-green-400 focus:ring-2 focus:ring-green-400/30 transition-all duration-300"
+                        placeholder="0.00"
+                        value={formData[field as keyof typeof formData]}
+                        onChange={(e) => handleInputChange(field, e.target.value)}
+                        className="h-12 rounded-[18px] border-slate-200 bg-white/80 text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:ring-0 transition-all duration-300"
                       />
                       <VoiceButton
-                        onTranscript={(text) => handleInflowItemChange(index, 'amount', text)}
-                        onClear={() => handleInflowItemChange(index, 'amount', "")}
+                        onTranscript={(text) => handleInputChange(field, text)}
+                        onClear={() => handleInputChange(field, "")}
                       />
-                    </div>
-                    <div className="col-span-3 flex items-center gap-1">
-                      <Input
-                        placeholder="Category"
-                        value={item.category}
-                        onChange={(e) => handleInflowItemChange(index, 'category', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-green-400 focus:ring-2 focus:ring-green-400/30 transition-all duration-300"
-                      />
-                      <VoiceButton
-                        onTranscript={(text) => handleInflowItemChange(index, 'category', text)}
-                        onClear={() => handleInflowItemChange(index, 'category', "")}
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => removeInflowItem(index)}
-                        disabled={inflowItems.length === 1}
-                        className="hover:scale-110 transition-transform duration-200"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label className="text-blue-100 font-bold text-lg flex items-center gap-2">
-                    <TrendingDown className="h-5 w-5 text-red-400" />
-                    Cash Outflows
-                  </Label>
-                  <Button
-                    onClick={addOutflowItem}
-                    className="bg-red-600 hover:bg-red-700 text-white border-red-500/30"
-                    size="sm"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add Item
-                  </Button>
-                </div>
-
-                {outflowItems.map((item, index) => (
-                  <div key={index} className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-4 flex items-center gap-1">
+              {/* Outflow Section */}
+              <div className="space-y-4 p-6 rounded-[28px] bg-orange-50/60 border border-orange-100 shadow-sm backdrop-blur-xl">
+                <h3 className="text-lg font-bold text-slate-900 border-b border-orange-100/30 pb-2">💸 Cash Outflows</h3>
+                {[
+                  { field: "costOfMaterials", label: "Cost of Materials", icon: "📦" },
+                  { field: "salaries", label: "Salaries", icon: "👥" },
+                  { field: "rent", label: "Rent", icon: "🏢" },
+                  { field: "utilities", label: "Utilities", icon: "⚡" },
+                  { field: "financeCost", label: "Finance Cost", icon: "🏦" },
+                  { field: "depreciation", label: "Depreciation", icon: "📉" },
+                  { field: "amortization", label: "Amortization", icon: "📋" },
+                  { field: "otherExpenses", label: "Other Expenses", icon: "📝" },
+                ].map(({ field, label, icon }) => (
+                  <div key={field} className="space-y-2">
+                    <Label htmlFor={field} className="text-slate-700 font-semibold flex items-center gap-2">
+                      <span>{icon}</span> {label} (₹)
+                    </Label>
+                    <div className="flex items-center gap-2">
                       <Input
-                        placeholder="Description"
-                        value={item.description}
-                        onChange={(e) => handleOutflowItemChange(index, 'description', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-red-400 focus:ring-2 focus:ring-red-400/30 transition-all duration-300"
-                      />
-                      <VoiceButton
-                        onTranscript={(text) => handleOutflowItemChange(index, 'description', text)}
-                        onClear={() => handleOutflowItemChange(index, 'description', "")}
-                      />
-                    </div>
-                    <div className="col-span-3 flex items-center gap-1">
-                      <Input
+                        id={field}
                         type="number"
-                        placeholder="Amount"
-                        value={item.amount}
-                        onChange={(e) => handleOutflowItemChange(index, 'amount', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-red-400 focus:ring-2 focus:ring-red-400/30 transition-all duration-300"
+                        placeholder="0.00"
+                        value={formData[field as keyof typeof formData]}
+                        onChange={(e) => handleInputChange(field, e.target.value)}
+                        className="h-12 rounded-[18px] border-slate-200 bg-white/80 text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:ring-0 transition-all duration-300"
                       />
                       <VoiceButton
-                        onTranscript={(text) => handleOutflowItemChange(index, 'amount', text)}
-                        onClear={() => handleOutflowItemChange(index, 'amount', "")}
+                        onTranscript={(text) => handleInputChange(field, text)}
+                        onClear={() => handleInputChange(field, "")}
                       />
-                    </div>
-                    <div className="col-span-3 flex items-center gap-1">
-                      <Input
-                        placeholder="Category"
-                        value={item.category}
-                        onChange={(e) => handleOutflowItemChange(index, 'category', e.target.value)}
-                        className="bg-white/5 border-blue-400/30 text-blue-100 focus:border-red-400 focus:ring-2 focus:ring-red-400/30 transition-all duration-300"
-                      />
-                      <VoiceButton
-                        onTranscript={(text) => handleOutflowItemChange(index, 'category', text)}
-                        onClear={() => handleOutflowItemChange(index, 'category', "")}
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => removeOutflowItem(index)}
-                        disabled={outflowItems.length === 1}
-                        className="hover:scale-110 transition-transform duration-200"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="flex gap-4 pt-4">
+              <div className="flex flex-col md:flex-row gap-4 pt-4">
+                <Button
+                  onClick={autoGenerateCashFlow}
+                  disabled={loading}
+                  className="flex-1 h-14 rounded-full bg-indigo-900 text-lg font-semibold text-white shadow-[0_20px_48px_rgba(15,23,42,0.18)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-indigo-800"
+                >
+                  <Sparkles className="mr-2 h-5 w-5 text-yellow-300" />
+                  {loading ? "Generating..." : "Auto-Generate from Live Data"}
+                </Button>
                 <Button
                   onClick={calculateCashFlow}
-                  className="flex-1 h-12 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold rounded-xl shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 transition-all duration-300 hover:scale-105"
+                  disabled={loading}
+                  className="flex-1 h-14 rounded-full bg-slate-950 text-lg font-semibold text-white shadow-[0_20px_48px_rgba(15,23,42,0.18)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-slate-800"
                 >
-                  Calculate Cash Flow
-                </Button>
-                <Button
-                  onClick={saveStatement}
-                  disabled={loading || !result}
-                  className="flex-1 h-12 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white font-bold rounded-xl shadow-lg shadow-green-500/30 hover:shadow-green-500/50 transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? "Saving..." : "Save Statement"}
+                  <Calculator className="mr-2 h-5 w-5" />
+                  {loading ? "Calculating & Saving..." : "Calculate (Manual)"}
                 </Button>
               </div>
-
-              {result && (
-                <div className="pt-4 border-t border-blue-400/20">
-                  <Button
-                    onClick={() => downloadSlip()}
-                    className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-bold py-6 rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all duration-300 hover:scale-105 group"
-                  >
-                    <Download className="h-5 w-5 mr-2 group-hover:animate-bounce" />
-                    Download Cash Flow Statement
-                  </Button>
-                </div>
-              )}
             </CardContent>
           </Card>
 
+          {/* Results Column */}
           <div className="space-y-8">
+            {/* Results Display */}
             {result && (
-              <Card className="backdrop-blur-2xl bg-white/10 border border-blue-400/20 rounded-3xl overflow-hidden">
-                <CardHeader>
-                  <CardTitle className="text-2xl font-black text-blue-100 flex items-center gap-3">
-                    <Sparkles className="h-6 w-6 text-cyan-400" />
-                    Calculation Results
-                  </CardTitle>
+              <Card className="liquid-panel relative overflow-hidden rounded-[36px] border-white/55 p-8 bg-white/40 animate-in fade-in duration-700">
+                <div className="absolute left-0 right-0 top-0 h-1 bg-gradient-to-r from-transparent via-sky-400 to-transparent" />
+
+                <CardHeader className="relative">
+                  <CardTitle className="text-2xl font-bold text-slate-950">Statement Summary</CardTitle>
+                  <CardDescription className="text-slate-600 mt-1">
+                    Cash flow results for period: <span className="font-bold text-slate-800">{formData.period || "current"}</span>
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="p-8">
-                  <div className="space-y-6">
-                    <div className="flex justify-between items-center p-4 bg-white/5 rounded-xl border border-blue-400/20">
-                      <span className="text-blue-200 font-semibold">Total Cash Inflow:</span>
-                      <span className="text-green-400 font-bold text-xl">₹{result.totalInflow.toFixed(2)}</span>
+                <CardContent className="space-y-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 rounded-xl bg-white/70 border border-slate-200">
+                      <p className="text-slate-500 font-medium mb-1">Total Inflow</p>
+                      <p className="text-xl font-bold text-emerald-600">₹{result.totalInflow.toFixed(2)}</p>
                     </div>
-                    <div className="flex justify-between items-center p-4 bg-white/5 rounded-xl border border-blue-400/20">
-                      <span className="text-blue-200 font-semibold">Total Cash Outflow:</span>
-                      <span className="text-red-400 font-bold text-xl">₹{result.totalOutflow.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between items-center p-4 bg-white/5 rounded-xl border border-blue-400/20 border-t-2 border-t-cyan-400/50">
-                      <span className="text-blue-200 font-bold text-lg">Net Cash Flow:</span>
-                      <span className={`font-bold text-2xl ${getStatusColor(result.status)} flex items-center gap-2`}>
-                        {getStatusIcon(result.status)}
-                        ₹{result.netCashFlow.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className={`text-center p-4 rounded-xl border-2 ${getStatusBgColor(result.status)}`}>
-                      <div className="text-lg font-bold mb-2">
-                        {result.status === 'positive' ? '✅ Positive Cash Flow' :
-                          result.status === 'negative' ? '⚠️ Negative Cash Flow' :
-                            '⚖️ Balanced Cash Flow'}
-                      </div>
-                      <div className="text-sm opacity-80">
-                        {result.status === 'positive' ?
-                          'Healthy cash position. Consider investment opportunities.' :
-                          result.status === 'negative' ?
-                            'Monitor expenses closely. Consider cost optimization.' :
-                            'Cash flow is balanced. Maintain current operations.'}
-                      </div>
+                    <div className="p-4 rounded-xl bg-white/70 border border-slate-200">
+                      <p className="text-slate-500 font-medium mb-1">Total Outflow</p>
+                      <p className="text-xl font-bold text-rose-600">₹{result.totalOutflow.toFixed(2)}</p>
                     </div>
                   </div>
+
+                  <div className="p-6 rounded-2xl bg-slate-950 text-white flex justify-between items-center shadow-lg">
+                    <div>
+                      <p className="text-slate-400 font-medium">Net Cash Flow</p>
+                      <p className="text-3xl font-black mt-1">₹{result.netCashFlow.toFixed(2)}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-xs uppercase tracking-wider text-slate-400 font-bold">Status</span>
+                      <Badge className={`border-0 rounded-xl px-3 py-1 font-semibold ${
+                        result.status === 'positive' 
+                          ? 'bg-emerald-500 text-white' 
+                          : result.status === 'negative' 
+                            ? 'bg-rose-500 text-white' 
+                            : 'bg-slate-500 text-white'
+                      }`}>
+                        {result.status}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <Button onClick={() => downloadSlip()} className="group rounded-full bg-slate-950 font-semibold text-white w-full py-4 shadow-[0_20px_48px_rgba(15,23,42,0.18)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-slate-800">
+                    <Download className="mr-2 h-5 w-5 group-hover:translate-y-1 transition-transform duration-300" /> Download Statement
+                  </Button>
                 </CardContent>
               </Card>
             )}
 
-            <Card className="backdrop-blur-2xl bg-white/10 border border-blue-400/20 rounded-3xl overflow-hidden">
+            {/* History Card */}
+            <Card className="liquid-panel overflow-hidden rounded-[36px] border-white/55 bg-white/40">
               <CardHeader>
-                <CardTitle className="text-2xl font-black text-blue-100 flex items-center gap-3">
-                  <FileText className="h-6 w-6 text-cyan-400" />
-                  Statement History
-                </CardTitle>
-                <CardDescription className="text-blue-200/70">
-                  {statements.length} statement{statements.length !== 1 ? 's' : ''} recorded
-                </CardDescription>
+                <CardTitle className="text-2xl font-bold text-slate-950">Statements History</CardTitle>
               </CardHeader>
               <CardContent className="max-h-[500px] overflow-y-auto p-6">
                 {statements.length === 0 ? (
-                  <div className="text-center py-8">
-                    <FileText className="h-12 w-12 text-blue-400/40 mx-auto mb-4" />
-                    <p className="text-blue-300/60">No statements yet.</p>
-                    <p className="text-blue-400/40 text-sm mt-1">Create your first cash flow statement!</p>
+                  <div className="text-center py-16 text-slate-500">
+                    <Database className="h-12 w-12 text-slate-400 mx-auto mb-4 animate-pulse" />
+                    <p className="text-slate-800 text-lg font-medium">No statements generated yet.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {statements.map((statement) => (
-                      <div
-                        key={statement._id}
-                        className="bg-white/5 backdrop-blur-xl border border-blue-400/20 rounded-xl p-4 hover:bg-white/10 hover:border-cyan-400/30 transition-all duration-300 group"
-                      >
-                        <div className="flex justify-between items-center mb-3">
-                          <span className="text-cyan-400 font-bold text-lg group-hover:text-cyan-300 transition-colors duration-300">
-                            {statement.period}
+                    {statements.map((stmt) => (
+                      <Card key={stmt._id} className="liquid-panel overflow-hidden rounded-[24px] border-white/60 bg-white/50 p-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-slate-800 font-bold text-lg">{stmt.period}</span>
+                          <span className={`font-black text-lg ${
+                            stmt.status === 'positive' 
+                              ? 'text-emerald-600' 
+                              : stmt.status === 'negative' 
+                                ? 'text-rose-600' 
+                                : 'text-slate-600'
+                          }`}>
+                            ₹{(stmt.netCashFlow || 0).toFixed(2)}
                           </span>
-                          <span className={`font-bold text-lg flex items-center gap-2 ${getStatusColor(statement.status)}`}>
-                            {getStatusIcon(statement.status)}
-                            ₹{statement.netCashFlow.toFixed(2)}
-                          </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm mb-3">
-                          <div className="bg-green-500/10 border border-green-400/20 rounded-lg p-2">
-                            <div className="text-green-400 font-semibold">Inflow</div>
-                            <div className="text-green-300">₹{statement.totalInflow.toFixed(2)}</div>
-                          </div>
-                          <div className="bg-red-500/10 border border-red-400/20 rounded-lg p-2">
-                            <div className="text-red-400 font-semibold">Outflow</div>
-                            <div className="text-red-300">₹{statement.totalOutflow.toFixed(2)}</div>
-                          </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 mb-3 p-2 bg-white/70 rounded-xl border border-slate-100">
+                          <div>Inflow: <span className="text-emerald-600 font-bold">₹{(stmt.totalInflow || 0).toFixed(2)}</span></div>
+                          <div>Outflow: <span className="text-rose-600 font-bold">₹{(stmt.totalOutflow || 0).toFixed(2)}</span></div>
                         </div>
-                        <Button
-                          onClick={() => downloadSlip(statement)}
-                          size="sm"
-                          className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white group/btn transition-all duration-300 hover:scale-105"
-                        >
-                          <Download className="h-3 w-3 mr-2 group-hover/btn:animate-bounce" />
-                          Download Statement
-                        </Button>
-                        <div className="text-xs text-blue-300/60 mt-2 text-center">
-                          {new Date(statement.createdAt).toLocaleDateString('en-IN', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric'
-                          })}
+                        <div className="flex gap-2">
+                          <Button onClick={() => downloadSlip(stmt)} size="sm" className="flex-1 rounded-full bg-slate-950 text-white hover:bg-slate-800">
+                            <Download className="h-3 w-3 mr-2" /> Download
+                          </Button>
+                          <Button onClick={() => stmt._id && deleteStatement(stmt._id)} size="sm" variant="outline" className="rounded-full border-red-200 text-red-600 hover:bg-red-50">
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
                         </div>
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 )}
               </CardContent>
             </Card>
           </div>
+        </div>
+        
+        <div className="mt-8 text-center pb-8">
+            <p className="text-slate-500 text-sm backdrop-blur-md inline-block px-6 py-2 rounded-full border border-white/40">
+                Powered by SHREE ANDAL AI SOFTWARE SOLUTIONS (OPC) PRIVATE LIMITED ✨
+            </p>
         </div>
       </main>
     </div>

@@ -1,12 +1,15 @@
 // API Configuration utility
-const isDevelopment = import.meta.env.VITE_DEV_MODE === 'true';
+const isDevelopment = typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.startsWith('192.168.'));
 
 // Get the appropriate API URL based on environment
 export const getApiUrl = (): string => {
   if (isDevelopment) {
     return import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
   }
-  return import.meta.env.VITE_PROD_API_URL || 'https://software.saaiss.in/api';
+  return 'https://software.saaiss.in/api';
 };
 
 // Base API URL
@@ -14,10 +17,13 @@ export const API_BASE_URL = getApiUrl();
 
 // API endpoints
 export const API_ENDPOINTS = {
-  // Auth endpoints
+  // Auth & Leads endpoints
   SIGNUP: `${API_BASE_URL}/signup`,
+  SIGNUP_TRIAL: `${API_BASE_URL}/signup-trial`,
   SIGNIN: `${API_BASE_URL}/signin`,
   USER: `${API_BASE_URL}/user`,
+  UPDATE_PROFILE: `${API_BASE_URL}/user`,
+  LEADS: `${API_BASE_URL}/leads`,
 
   // Payment endpoints
   CREATE_ORDER: `${API_BASE_URL}/create-order`,
@@ -40,6 +46,8 @@ export const API_ENDPOINTS = {
   AI: `${API_BASE_URL}/ai`,
   AI_INVOICE_OCR: `${API_BASE_URL}/ai/invoice-ocr`,
   AI_EXTRACT_TEXT: `${API_BASE_URL}/ai/extract-text`,
+  AI_CHAT_HISTORY: `${API_BASE_URL}/ai/chat-history`,
+  AI_CHAT_MESSAGE: `${API_BASE_URL}/ai/chat-message`,
 
   // Civil Engineering endpoints
   CIVIL_CPM_CALCULATE: `${API_BASE_URL}/civil-engineering/calculate-cpm`,
@@ -70,7 +78,24 @@ export const apiRequest = async (
     },
   };
 
-  return fetch(endpoint, config);
+  const endpoints = [
+    endpoint,
+    endpoint.replace("http://localhost:5000/api", "http://localhost:5001/api"),
+    endpoint.replace("http://localhost:5001/api", "http://localhost:5000/api"),
+  ].filter((value, index, list) => list.indexOf(value) === index);
+
+  let lastError: unknown;
+
+  for (const requestEndpoint of endpoints) {
+    try {
+      return await fetch(requestEndpoint, config);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  console.error("API request failed:", lastError);
+  throw new Error("API server is not reachable. Please start the backend and try again.");
 };
 
 // Log current API configuration (for debugging)

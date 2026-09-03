@@ -5,31 +5,54 @@ import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
-// Middleware to verify token (local definition since server.js isn't exporting it)
+// Middleware to verify token (with fallback for optional auth / guest mode)
 const verifyToken = (req, res, next) => {
     const token = req.headers.authorization?.split(" ")[1];
-    if (!token) return res.status(401).json({ message: "Access denied. No token provided." });
+    const JWT_SECRET = process.env.JWT_SECRET || "fallback_jwt_secret_2024_finance_app";
+
+    if (!token || token === "null" || token === "undefined") {
+        req.user = { id: "000000000000000000000000" };
+        return next();
+    }
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET);
         req.user = decoded;
         next();
     } catch (error) {
-        res.status(400).json({ message: "Invalid token" });
+        req.user = { id: "000000000000000000000000" };
+        next();
     }
 };
 
-// ✅ POST route to add bookkeeping entry
+// ❌ POST route to add bookkeeping entry - BLOCKED for direct manual inputs
 router.post("/add", verifyToken, async (req, res) => {
+    // Check if this is a direct manual user entry attempt
+    if (!req.body.isAutomated) {
+        return res.status(403).json({
+            message: "Direct manual bookkeeping transaction creation is disabled. Financial transactions must originate from Inventory or Invoice modules."
+        });
+    }
+
     try {
-        const { date, description, type, amount, category } = req.body;
+        const { date, description, type, amount, category, referenceId, isAutomated } = req.body;
+        const entryType = (type && (type.toString().toLowerCase() === "income")) ? "income" : "expense";
+        const entryDate = date ? new Date(date) : new Date();
+        const parsedAmount = parseFloat(amount);
+
+        if (isNaN(parsedAmount) || !description) {
+            return res.status(400).json({ message: "Valid amount and description are required" });
+        }
+
         const newEntry = new BookkeepingEntry({
             userId: req.user.id,
-            date: new Date(date),
+            date: isNaN(entryDate.getTime()) ? new Date() : entryDate,
             description,
-            type,
-            amount,
-            category
+            type: entryType,
+            amount: parsedAmount,
+            category: category || "General",
+            referenceId: referenceId || null,
+            isAutomated: isAutomated || false
         });
         await newEntry.save();
         res.status(201).json({
@@ -38,7 +61,7 @@ router.post("/add", verifyToken, async (req, res) => {
         });
     } catch (error) {
         console.error("Error saving bookkeeping entry:", error);
-        res.status(500).json({ message: "Error saving bookkeeping entry", error });
+        res.status(500).json({ message: "Error saving bookkeeping entry", error: error.message || error });
     }
 });
 

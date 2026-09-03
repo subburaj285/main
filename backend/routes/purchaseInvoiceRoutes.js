@@ -1,6 +1,8 @@
 import express from "express";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+import { checkPlanLimit } from "../utils/authMiddleware.js";
+import { upsertAutomatedBookkeepingEntry, removeAutomatedBookkeepingEntry } from "../utils/bookkeepingHelper.js";
 
 const router = express.Router();
 
@@ -11,16 +13,24 @@ const purchaseInvoiceSchema = new mongoose.Schema({
         ref: "User",
         required: true,
     },
+    customerType: { type: String, enum: ["B2B", "B2C"], default: "B2C" },
+    customerName: { type: String, default: "" },
+    customerPhone: { type: String, default: "" },
+    customerGstin: { type: String, default: "" },
     supplierName: { type: String, required: true },
     phone: { type: String, default: "" },
     gstin: { type: String, default: "" },
     billNo: { type: String, required: true },
     billDate: { type: String, required: true },
+    paymentMethod: { type: String, enum: ["Cash", "Credit", "G Pay", "Net Banking"], default: "Cash" },
+    invoiceSize: { type: String, enum: ["A4", "A5"], default: "A4" },
+    invoiceFormat: { type: String, enum: ["Supermarket", "Hotel", "Stationery Shop"], default: "Supermarket" },
     stateOfSupply: { type: String, required: true },
     businessState: { type: String, default: "Tamil Nadu" },
     items: [{
         itemName: { type: String, required: true },
         itemCode: { type: String, default: "" },
+        codeType: { type: String, enum: ["HSN", "SAC"], default: "HSN" },
         hsnCode: { type: String, default: "" },
         quantity: { type: Number, required: true },
         unit: { type: String, default: "Pcs" },
@@ -87,6 +97,10 @@ router.get("/public/:id", async (req, res) => {
 // POST - Create purchase invoice & add items to inventory stock
 router.post("/create", verifyToken, async (req, res) => {
     try {
+        const limitCheck = await checkPlanLimit(req.user.id, req.user.role, "purchase-invoice");
+        if (!limitCheck.allowed) {
+            return res.status(403).json(limitCheck);
+        }
         const invoiceData = req.body;
 
         const newInvoice = new PurchaseInvoice({
@@ -94,6 +108,17 @@ router.post("/create", verifyToken, async (req, res) => {
             ...invoiceData,
         });
         await newInvoice.save();
+
+        // Automatically generate Bookkeeping Entry for purchase invoice
+        await upsertAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            date: newInvoice.billDate ? new Date(newInvoice.billDate) : new Date(),
+            description: `Purchase Invoice ${newInvoice.billNo} from ${newInvoice.supplierName}`,
+            category: "Purchases",
+            amount: newInvoice.total || newInvoice.subtotal,
+            type: "expense",
+            referenceId: `purchase_inv_${newInvoice._id}`
+        });
 
         // Add purchased items to inventory stock
         const InventoryItem = getInventoryModel();
@@ -121,6 +146,7 @@ router.post("/create", verifyToken, async (req, res) => {
                     userId: req.user.id,
                     itemName: item.itemName,
                     sku: sku,
+                    hsnCode: item.hsnCode || "",
                     quantity: item.quantity,
                     price: item.pricePerUnit,
                     category: "General",
@@ -178,6 +204,13 @@ router.delete("/:id", verifyToken, async (req, res) => {
         if (!deleted) {
             return res.status(404).json({ message: "Purchase invoice not found" });
         }
+
+        // Remove automated Bookkeeping Entry
+        await removeAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            referenceId: `purchase_inv_${req.params.id}`
+        });
+
         res.json({ message: "Purchase invoice deleted" });
     } catch (error) {
         console.error("Error deleting purchase invoice:", error);
