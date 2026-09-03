@@ -19,22 +19,6 @@ const getPurchaseInvoiceModel = () => {
     }
 };
 
-const getBalanceSheetModel = () => {
-    try {
-        return mongoose.model("BalanceSheet");
-    } catch (e) {
-        return mongoose.model("BalanceSheet", new mongoose.Schema({}, { strict: false }));
-    }
-};
-
-const getPayrollModel = () => {
-    try {
-        return mongoose.model("Payroll");
-    } catch (e) {
-        return mongoose.model("Payroll", new mongoose.Schema({}, { strict: false }));
-    }
-};
-
 const getInventoryItemModel = () => {
     try {
         return mongoose.model("InventoryItem");
@@ -67,208 +51,94 @@ export function resolvePeriod(period) {
     return { startDate, endDate };
 }
 
+/**
+ * Calculates central financial metrics strictly using BookkeepingEntry as the single financial source of truth.
+ */
 export async function getFinanceMetrics(userId, start, end) {
     const startDate = new Date(start);
     const endDate = new Date(end);
-
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
-    // 1. Fetch Bookkeeping Entries
-    const bookkeepingEntries = await BookkeepingEntry.find({
+    const userFilter = {
         $or: [
             { userId: userObjectId },
             { userId: userId.toString() }
-        ],
+        ]
+    };
+
+    // 1. Fetch Bookkeeping Entries for the period
+    const bookkeepingEntries = await BookkeepingEntry.find({
+        ...userFilter,
         isDeleted: { $ne: true },
         date: { $gte: startDate, $lte: endDate }
     });
 
-    // Priority 4: Prevent duplicate financial events. Filter out entries with referenceId or isAutomated flag
-    const validBkEntries = bookkeepingEntries.filter(e => !e.isAutomated && !e.referenceId);
+    const bkIncomeEntries = bookkeepingEntries.filter(e => e.type === "income" || e.type === "Income");
+    const bkExpenseEntries = bookkeepingEntries.filter(e => e.type === "expense" || e.type === "Expense");
 
-    const bkIncome = validBkEntries
-        .filter(e => e.type === "income" || e.type === "Income")
-        .reduce((sum, e) => sum + (e.amount || 0), 0);
-
-    const bkExpense = validBkEntries
-        .filter(e => e.type === "expense" || e.type === "Expense")
-        .reduce((sum, e) => sum + (e.amount || 0), 0);
+    const totalRevenue = bkIncomeEntries.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const totalExpenses = bkExpenseEntries.reduce((sum, e) => sum + (e.amount || 0), 0);
 
     // Group bookkeeping expenses by category
     const bkCategoryExpenses = {};
-    validBkEntries
-        .filter(e => e.type === "expense" || e.type === "Expense")
-        .forEach(e => {
-            const cat = e.category || "General";
-            bkCategoryExpenses[cat] = (bkCategoryExpenses[cat] || 0) + (e.amount || 0);
-        });
-
-    // 2. Fetch Invoices (Sales)
-    const Invoice = getInvoiceModel();
-    let salesInvoices = [];
-    if (Invoice) {
-        salesInvoices = await Invoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            sourceInvoiceType: { $ne: "purchase" },
-            invoiceDate: { $gte: startDate, $lte: endDate }
-        });
-    }
-
-    // P&L Revenue from Sales Invoices: subtotal (pre-tax value)
-    const salesInvoiceSubtotalRevenue = salesInvoices.reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-    // Cash Inflow: actual cash collected (post-tax value)
-    const salesInvoiceCashInflow = salesInvoices.reduce((sum, inv) => sum + (inv.amountPaid || 0), 0);
-
-    // Outstanding invoices (Accounts Receivable up to period end)
-    let salesInvoiceOutstanding = 0;
-    if (Invoice) {
-        const allSalesInvoicesUpToPeriod = await Invoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            sourceInvoiceType: { $ne: "purchase" },
-            invoiceDate: { $lte: endDate }
-        });
-        salesInvoiceOutstanding = allSalesInvoicesUpToPeriod
-            .filter(inv => inv.paymentStatus !== "paid" && inv.status !== "paid")
-            .reduce((sum, inv) => sum + (inv.balanceDue || 0), 0);
-    }
-
-    // 3. Fetch Purchase Invoices (Period-scoped for P&L / Cash Flow)
-    const PurchaseInvoice = getPurchaseInvoiceModel();
-    let purchaseInvoices = [];
-    if (PurchaseInvoice) {
-        purchaseInvoices = await PurchaseInvoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            createdAt: { $gte: startDate, $lte: endDate }
-        });
-    }
-
-    // P&L Expense from Purchase Invoices: subtotal (pre-tax value)
-    const purchaseInvoiceSubtotalExpense = purchaseInvoices.reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-    // Cash Outflow: actual paid amount (post-tax value)
-    const purchaseInvoiceCashOutflow = purchaseInvoices.reduce((sum, inv) => sum + (inv.paid || 0), 0);
-
-    // Outstanding payables (Accounts Payable up to period end)
-    let purchaseInvoiceOutstanding = 0;
-    if (PurchaseInvoice) {
-        const allPurchaseInvoicesUpToPeriod = await PurchaseInvoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            createdAt: { $lte: endDate }
-        });
-        purchaseInvoiceOutstanding = allPurchaseInvoicesUpToPeriod.reduce((sum, inv) => sum + (inv.balance || 0), 0);
-    }
-
-    // 4. Fetch Direct Inventory Sales
-    const inventorySales = await Sale.find({
-        $or: [
-            { userId: userObjectId },
-            { userId: userId.toString() }
-        ],
-        isDeleted: { $ne: true },
-        saleDate: { $gte: startDate, $lte: endDate }
+    bkExpenseEntries.forEach(e => {
+        const cat = e.category || "General";
+        bkCategoryExpenses[cat] = (bkCategoryExpenses[cat] || 0) + (e.amount || 0);
     });
 
-    // P&L Revenue from direct Inventory Sales: subtotal (pre-tax value)
-    const inventorySaleSubtotalRevenue = inventorySales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-    // Cash Inflow: assume direct inventory sale gets paid immediately (post-tax grand total)
-    const inventorySaleCashInflow = inventorySales.reduce((sum, s) => sum + (s.grandTotal || 0), 0);
-    // Cost of Goods Sold (COGS)
-    // Priority 3: Use actual purchase/buy cost if available (costPrice or buyPrice).
-    // If cost is unavailable, fallback to 60% of unit selling price as estimated cost.
-    const inventoryItemIds = inventorySales.map(s => s.inventoryItemId).filter(Boolean);
-    const InventoryItem = getInventoryItemModel();
-    let inventoryItems = [];
-    if (InventoryItem && inventoryItemIds.length > 0) {
-        inventoryItems = await InventoryItem.find({ _id: { $in: inventoryItemIds } });
-    }
-    const inventoryItemsMap = new Map(inventoryItems.map(item => [item._id.toString(), item]));
-
-    let calculatedCogs = 0;
-    inventorySales.forEach(sale => {
-        const item = sale.inventoryItemId ? inventoryItemsMap.get(sale.inventoryItemId.toString()) : null;
-        const actualCostPerUnit = item?.costPrice || item?.buyPrice || (sale.unitPrice * 0.6);
-        calculatedCogs += actualCostPerUnit * sale.quantitySold;
-    });
-
-    // 5. Fetch Payrolls via safe getter — Payroll model is registered by payrollRoutes.js at startup
-    const Payroll = getPayrollModel();
-    let payrolls = [];
-    if (Payroll) {
-        payrolls = await Payroll.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            createdAt: { $gte: startDate, $lte: endDate }
-        });
-    }
-    const payrollSalariesExpense = payrolls.reduce((sum, pr) => sum + (pr.grossSalary || 0), 0);
-
-    // --- Dynamic Aggregations ---
-
-    // Revenues (pre-tax / subtotal)
-    const totalRevenue = salesInvoiceSubtotalRevenue + bkIncome + inventorySaleSubtotalRevenue;
-
-    // Expenses (pre-tax / subtotal)
-    // COGS is strictly the cost of inventory items sold during the period
-    const cogs = calculatedCogs;
-    const salaries = payrollSalariesExpense + (bkCategoryExpenses["Salaries"] || bkCategoryExpenses["salaries"] || 0);
+    const cogs = (bkCategoryExpenses["Inventory Stock"] || 0) + (bkCategoryExpenses["Cost of Goods Sold"] || 0) + (bkCategoryExpenses["COGS"] || 0);
+    const salaries = bkCategoryExpenses["Salaries"] || bkCategoryExpenses["salaries"] || 0;
     const rent = bkCategoryExpenses["Rent"] || bkCategoryExpenses["rent"] || 0;
     const utilities = bkCategoryExpenses["Utilities"] || bkCategoryExpenses["utilities"] || 0;
-    const costOfMaterials = (bkCategoryExpenses["Materials"] || bkCategoryExpenses["materials"] || 0);
+    const costOfMaterials = bkCategoryExpenses["Materials"] || bkCategoryExpenses["materials"] || 0;
     const financeCost = bkCategoryExpenses["Finance"] || bkCategoryExpenses["finance"] || 0;
     const depreciation = bkCategoryExpenses["Depreciation"] || bkCategoryExpenses["depreciation"] || 0;
     const amortization = bkCategoryExpenses["Amortization"] || bkCategoryExpenses["amortization"] || 0;
 
-    // Aggregate other categories
-    const standardCategories = ["Salaries", "salaries", "Rent", "rent", "Utilities", "utilities", "Materials", "materials", "Finance", "finance", "Depreciation", "depreciation", "Amortization", "amortization"];
-    let otherExpenses = 0;
-    Object.entries(bkCategoryExpenses).forEach(([cat, val]) => {
-        if (!standardCategories.includes(cat)) {
-            otherExpenses += val;
-        }
-    });
-
-    const totalExpenses = cogs + salaries + rent + utilities + financeCost + depreciation + amortization + otherExpenses;
     const netProfit = totalRevenue - totalExpenses;
-    const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue * 100) : 0;
+    const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
 
-    // Cash Flow Inflow / Outflow (cash basis)
-    const totalCashInflow = salesInvoiceCashInflow + bkIncome + inventorySaleCashInflow;
-    const totalCashOutflow = purchaseInvoiceCashOutflow + bkExpense + payrollSalariesExpense;
+    // Accounts Receivable and Accounts Payable
+    const Invoice = getInvoiceModel();
+    let salesInvoiceOutstanding = 0;
+    let salesInvoices = [];
+    if (Invoice) {
+        salesInvoices = await Invoice.find({
+            ...userFilter,
+            isDeleted: { $ne: true },
+            sourceInvoiceType: { $ne: "purchase" },
+            invoiceDate: { $lte: endDate }
+        });
+        salesInvoiceOutstanding = salesInvoices
+            .filter(inv => inv.paymentStatus !== "paid" && inv.status !== "paid")
+            .reduce((sum, inv) => sum + (inv.balanceDue || 0), 0);
+    }
+
+    const PurchaseInvoice = getPurchaseInvoiceModel();
+    let purchaseInvoiceOutstanding = 0;
+    let purchaseInvoices = [];
+    if (PurchaseInvoice) {
+        purchaseInvoices = await PurchaseInvoice.find({
+            ...userFilter,
+            isDeleted: { $ne: true },
+            createdAt: { $lte: endDate }
+        });
+        purchaseInvoiceOutstanding = purchaseInvoices.reduce((sum, inv) => sum + (inv.balance || 0), 0);
+    }
+
+    const totalCashInflow = totalRevenue;
+    const totalCashOutflow = totalExpenses;
     const netCashFlow = totalCashInflow - totalCashOutflow;
 
+    const salesRevenue = bkIncomeEntries.filter(e => e.category === "Sales").reduce((sum, e) => sum + (e.amount || 0), 0);
+    const inventorySalesRevenue = bkIncomeEntries.filter(e => e.category === "Inventory Sales").reduce((sum, e) => sum + (e.amount || 0), 0);
+
     return {
-        period: {
-            start: startDate,
-            end: endDate
-        },
+        period: { start: startDate, end: endDate },
         revenue: {
-            sales: salesInvoiceSubtotalRevenue,
-            bookkeepingIncome: bkIncome,
-            inventorySales: inventorySaleSubtotalRevenue,
+            sales: salesRevenue,
+            bookkeepingIncome: totalRevenue,
+            inventorySales: inventorySalesRevenue,
             total: totalRevenue
         },
         expense: {
@@ -280,7 +150,7 @@ export async function getFinanceMetrics(userId, start, end) {
             financeCost,
             depreciation,
             amortization,
-            otherExpenses,
+            otherExpenses: Math.max(0, totalExpenses - (cogs + salaries + rent + utilities + financeCost + depreciation + amortization)),
             total: totalExpenses
         },
         netProfit,
@@ -296,140 +166,86 @@ export async function getFinanceMetrics(userId, start, end) {
     };
 }
 
+/**
+ * Calculates live Balance Sheet using BookkeepingEntry as the central transaction ledger.
+ */
 export async function getLiveBalanceSheet(userId, period = "this-month") {
     const { startDate, endDate } = resolvePeriod(period);
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
-    // 1. Fetch Bookkeeping Entries up to period end
-    const bkEntries = await BookkeepingEntry.find({
+    const userFilter = {
         $or: [
             { userId: userObjectId },
             { userId: userId.toString() }
-        ],
+        ]
+    };
+
+    // Cumulative Bookkeeping Entries up to period end
+    const cumulativeEntries = await BookkeepingEntry.find({
+        ...userFilter,
         isDeleted: { $ne: true },
         date: { $lte: endDate }
     });
-    const validBkEntries = bkEntries.filter(e => !e.isAutomated && !e.referenceId);
-    const bkIncome = validBkEntries
+
+    const cumulativeIncome = cumulativeEntries
         .filter(e => e.type === "income" || e.type === "Income")
         .reduce((sum, e) => sum + (e.amount || 0), 0);
-    const bkExpense = validBkEntries
+
+    const cumulativeExpense = cumulativeEntries
         .filter(e => e.type === "expense" || e.type === "Expense")
         .reduce((sum, e) => sum + (e.amount || 0), 0);
 
-    // 2. Fetch Invoices (Sales)
+    // Accounts Receivable & Accounts Payable
     const Invoice = getInvoiceModel();
-    let salesInvoices = [];
+    let accountsReceivable = 0;
     if (Invoice) {
-        salesInvoices = await Invoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
+        const salesInvoices = await Invoice.find({
+            ...userFilter,
             isDeleted: { $ne: true },
             sourceInvoiceType: { $ne: "purchase" },
             invoiceDate: { $lte: endDate }
         });
+        accountsReceivable = salesInvoices
+            .filter(inv => inv.paymentStatus !== "paid" && inv.status !== "paid")
+            .reduce((sum, inv) => sum + (inv.balanceDue || 0), 0);
     }
-    const salesInvoiceSubtotal = salesInvoices.reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-    const salesInvoicePaid = salesInvoices.reduce((sum, inv) => sum + (inv.amountPaid || 0), 0);
-    const accountsReceivable = salesInvoices
-        .filter(inv => inv.paymentStatus !== "paid" && inv.status !== "paid")
-        .reduce((sum, inv) => sum + (inv.balanceDue || 0), 0);
 
-    // 3. Fetch Purchase Invoices
     const PurchaseInvoice = getPurchaseInvoiceModel();
-    let purchaseInvoices = [];
+    let accountsPayable = 0;
     if (PurchaseInvoice) {
-        purchaseInvoices = await PurchaseInvoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() }
-            ],
+        const purchaseInvoices = await PurchaseInvoice.find({
+            ...userFilter,
             isDeleted: { $ne: true },
             createdAt: { $lte: endDate }
         });
+        accountsPayable = purchaseInvoices.reduce((sum, inv) => sum + (inv.balance || 0), 0);
     }
-    const purchaseInvoiceSubtotal = purchaseInvoices.reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-    const purchaseInvoicePaid = purchaseInvoices.reduce((sum, inv) => sum + (inv.paid || 0), 0);
-    const accountsPayable = purchaseInvoices.reduce((sum, inv) => sum + (inv.balance || 0), 0);
 
-    // 4. Fetch Inventory Sales and Current Inventory Value
-    const inventorySales = await Sale.find({
-        $or: [
-            { userId: userObjectId },
-            { userId: userId.toString() }
-        ],
-        isDeleted: { $ne: true },
-        saleDate: { $lte: endDate }
-    });
-    const inventorySaleSubtotal = inventorySales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-    const inventorySalePaid = inventorySales.reduce((sum, s) => sum + (s.grandTotal || 0), 0);
-
-    const inventoryItemIds = inventorySales.map(s => s.inventoryItemId).filter(Boolean);
+    // Current Inventory Stock Valuation
     const InventoryItem = getInventoryItemModel();
-    let inventoryItems = [];
+    let currentInventoryValuation = 0;
     if (InventoryItem) {
-        inventoryItems = await InventoryItem.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() }
-            ],
+        const inventoryItems = await InventoryItem.find({
+            ...userFilter,
             isDeleted: { $ne: true }
         });
+        currentInventoryValuation = inventoryItems.reduce((sum, item) => sum + ((item.quantity || 0) * (item.price || item.costPrice || 0)), 0);
     }
-    const inventoryItemsMap = new Map(inventoryItems.map(item => [item._id.toString(), item]));
 
-    let calculatedCogs = 0;
-    inventorySales.forEach(sale => {
-        const item = sale.inventoryItemId ? inventoryItemsMap.get(sale.inventoryItemId.toString()) : null;
-        const actualCostPerUnit = item?.costPrice || item?.buyPrice || (sale.unitPrice * 0.6);
-        calculatedCogs += actualCostPerUnit * sale.quantitySold;
-    });
+    // Cash and Bank Balance: Total Inflows - Total Outflows
+    const cashAndBank = cumulativeIncome - cumulativeExpense;
 
-    // Current Inventory valuation: stock quantity * price
-    const currentInventoryValuation = inventoryItems.reduce((sum, item) => sum + ((item.quantity || 0) * (item.price || item.costPrice || 0)), 0);
-
-    // 5. Fetch Payrolls
-    const Payroll = getPayrollModel();
-    let payrolls = [];
-    if (Payroll) {
-        payrolls = await Payroll.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
-            isDeleted: { $ne: true },
-            createdAt: { $lte: endDate }
-        });
-    }
-    const payrollSalariesExpense = payrolls.reduce((sum, pr) => sum + (pr.grossSalary || 0), 0);
-
-    // 6. Balance Sheet baseline calculations from live central data
     const fixedAssets = 0;
-    const nonCurrentLiabilities = 0;
-
-    // Cash and Cash Equivalents
-    const totalCashInflow = salesInvoicePaid + bkIncome + inventorySalePaid;
-    const totalCashOutflow = purchaseInvoicePaid + bkExpense + payrollSalariesExpense;
-    const cashAndBank = totalCashInflow - totalCashOutflow;
-
     const currentAssets = cashAndBank + accountsReceivable + currentInventoryValuation;
     const totalAssets = currentAssets + fixedAssets;
 
     const currentLiabilities = accountsPayable;
+    const nonCurrentLiabilities = 0;
     const totalLiabilities = currentLiabilities + nonCurrentLiabilities;
 
-    // Retained Earnings = Cumulative Revenue - Cumulative Expenses
-    const cumulativeRevenue = salesInvoiceSubtotal + bkIncome + inventorySaleSubtotal;
-    const cumulativeExpenses = calculatedCogs + payrollSalariesExpense + bkExpense + purchaseInvoiceSubtotal;
-    const retainedEarnings = cumulativeRevenue - cumulativeExpenses;
-
-    const totalEquity = totalAssets - totalLiabilities;
+    // Retained Earnings = Cumulative Net Income
+    const retainedEarnings = cumulativeIncome - cumulativeExpense;
+    const totalEquity = totalAssets - totalLiabilities; // Enforces exact accounting equation: Total Assets = Total Liabilities + Total Equity
     const balanced = Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 1.0;
 
     return {
@@ -488,17 +304,19 @@ export async function getGstAnalytics(userId, period = "this-month") {
     const { startDate, endDate } = resolvePeriod(period);
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
+    const userFilter = {
+        $or: [
+            { userId: userObjectId },
+            { userId: userId.toString() }
+        ]
+    };
+
     // 1. Fetch Sales Invoices
     const Invoice = getInvoiceModel();
     let salesInvoices = [];
     if (Invoice) {
         salesInvoices = await Invoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() },
-                { createdBy: userObjectId },
-                { createdBy: userId.toString() }
-            ],
+            ...userFilter,
             isDeleted: { $ne: true },
             sourceInvoiceType: { $ne: "purchase" },
             invoiceDate: { $gte: startDate, $lte: endDate }
@@ -507,10 +325,7 @@ export async function getGstAnalytics(userId, period = "this-month") {
 
     // 2. Fetch POS / Inventory Sales
     const inventorySales = await Sale.find({
-        $or: [
-            { userId: userObjectId },
-            { userId: userId.toString() }
-        ],
+        ...userFilter,
         isDeleted: { $ne: true },
         saleDate: { $gte: startDate, $lte: endDate }
     });
@@ -520,10 +335,7 @@ export async function getGstAnalytics(userId, period = "this-month") {
     let purchaseInvoices = [];
     if (PurchaseInvoice) {
         purchaseInvoices = await PurchaseInvoice.find({
-            $or: [
-                { userId: userObjectId },
-                { userId: userId.toString() }
-            ],
+            ...userFilter,
             isDeleted: { $ne: true },
             createdAt: { $gte: startDate, $lte: endDate }
         });

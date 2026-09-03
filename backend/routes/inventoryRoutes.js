@@ -1,5 +1,9 @@
 import express from "express";
 import mongoose from "mongoose";
+import jwt from "jsonwebtoken";
+import Sale from "../models/Sale.js";
+import Category from "../models/Category.js";
+import { upsertAutomatedBookkeepingEntry, removeAutomatedBookkeepingEntry } from "../utils/bookkeepingHelper.js";
 
 const router = express.Router();
 
@@ -26,10 +30,6 @@ const inventorySchema = new mongoose.Schema({
 });
 
 const InventoryItem = mongoose.model("InventoryItem", inventorySchema);
-
-import jwt from "jsonwebtoken";
-import Sale from "../models/Sale.js";
-import Category from "../models/Category.js";
 
 // Middleware to verify token
 const verifyToken = (req, res, next) => {
@@ -72,6 +72,22 @@ router.post("/add", verifyToken, async (req, res) => {
             stateOfSupply
         });
         await newItem.save();
+
+        // Automatically generate Bookkeeping Entry for inventory stock addition if cost and quantity exist
+        const unitCost = newItem.costPrice || newItem.buyPrice || newItem.price || 0;
+        const totalStockValue = unitCost * (newItem.quantity || 0);
+        if (totalStockValue > 0) {
+            await upsertAutomatedBookkeepingEntry({
+                userId: req.user.id,
+                date: new Date(),
+                description: `Inventory Stock Addition: ${newItem.itemName} (${newItem.quantity} units)`,
+                category: "Inventory Stock",
+                amount: totalStockValue,
+                type: "expense",
+                referenceId: `inv_add_${newItem._id}`
+            });
+        }
+
         res.status(201).json({
             message: "Item added successfully!",
             item: newItem
@@ -171,6 +187,17 @@ router.post("/sell/:id", verifyToken, async (req, res) => {
 
         await Promise.all([item.save(), newSale.save()]);
 
+        // Automatically generate Bookkeeping Entry for inventory sale
+        await upsertAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            date: newSale.saleDate || new Date(),
+            description: `Inventory Sale: ${item.itemName} (${quantitySold} units)`,
+            category: "Inventory Sales",
+            amount: grandTotal || subtotal,
+            type: "income",
+            referenceId: `inv_sale_${newSale._id}`
+        });
+
         res.json({
             message: "Item sold successfully",
             item,
@@ -202,6 +229,12 @@ router.delete("/:id", verifyToken, async (req, res) => {
         if (!deletedItem) {
             return res.status(404).json({ message: "Item not found or unauthorized" });
         }
+
+        // Remove associated automated bookkeeping entry if any
+        await removeAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            referenceId: `inv_add_${id}`
+        });
 
         res.json({ message: "Item deleted successfully" });
     } catch (error) {

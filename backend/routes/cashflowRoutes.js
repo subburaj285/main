@@ -307,12 +307,8 @@ router.get("/predict", verifyToken, async (req, res) => {
         });
       });
     } else {
-      // Build monthly points from live Bookkeeping, Invoices, PurchaseInvoices, and Sales collections
+      // Build monthly points from central Bookkeeping collection
       const BookkeepingEntry = mongoose.model("BookkeepingEntry");
-      const Sale = mongoose.model("Sale");
-      let Invoice = null, PurchaseInvoice = null;
-      try { Invoice = mongoose.model("Invoice"); } catch(e) {}
-      try { PurchaseInvoice = mongoose.model("PurchaseInvoice"); } catch(e) {}
 
       for (let i = 5; i >= 0; i--) {
         const mStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -322,43 +318,14 @@ router.get("/predict", verifyToken, async (req, res) => {
         let monthInflow = 0;
         let monthOutflow = 0;
 
-        // Bookkeeping
         if (BookkeepingEntry) {
           const bkEntries = await BookkeepingEntry.find({
-            userId: userObjectId,
-            date: { $gte: mStart, $lte: mEnd },
-            isAutomated: { $ne: true }
+            $or: [{ userId: userObjectId }, { userId: userId.toString() }],
+            isDeleted: { $ne: true },
+            date: { $gte: mStart, $lte: mEnd }
           });
-          monthInflow += bkEntries.filter(e => e.type === "income" || e.type === "Income").reduce((sum, e) => sum + (e.amount || 0), 0);
-          monthOutflow += bkEntries.filter(e => e.type === "expense" || e.type === "Expense").reduce((sum, e) => sum + (e.amount || 0), 0);
-        }
-
-        // Invoices (paid)
-        if (Invoice) {
-          const invs = await Invoice.find({
-            $or: [{ userId: userObjectId }, { createdBy: userId }],
-            isDeleted: false,
-            invoiceDate: { $gte: mStart, $lte: mEnd }
-          });
-          monthInflow += invs.reduce((sum, inv) => sum + (inv.amountPaid || 0), 0);
-        }
-
-        // Purchase Invoices (paid)
-        if (PurchaseInvoice) {
-          const pinvs = await PurchaseInvoice.find({
-            userId: userObjectId,
-            createdAt: { $gte: mStart, $lte: mEnd }
-          });
-          monthOutflow += pinvs.reduce((sum, inv) => sum + (inv.paid || 0), 0);
-        }
-
-        // Sales
-        if (Sale) {
-          const sales = await Sale.find({
-            userId: userObjectId,
-            saleDate: { $gte: mStart, $lte: mEnd }
-          });
-          monthInflow += sales.reduce((sum, s) => sum + (s.grandTotal || 0), 0);
+          monthInflow = bkEntries.filter(e => e.type === "income" || e.type === "Income").reduce((sum, e) => sum + (e.amount || 0), 0);
+          monthOutflow = bkEntries.filter(e => e.type === "expense" || e.type === "Expense").reduce((sum, e) => sum + (e.amount || 0), 0);
         }
 
         if (monthInflow > 0 || monthOutflow > 0) {

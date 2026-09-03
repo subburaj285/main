@@ -2,6 +2,7 @@ import express from "express";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 import { checkPlanLimit } from "../utils/authMiddleware.js";
+import { upsertAutomatedBookkeepingEntry, removeAutomatedBookkeepingEntry } from "../utils/bookkeepingHelper.js";
 
 const router = express.Router();
 
@@ -108,6 +109,17 @@ router.post("/create", verifyToken, async (req, res) => {
         });
         await newInvoice.save();
 
+        // Automatically generate Bookkeeping Entry for purchase invoice
+        await upsertAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            date: newInvoice.billDate ? new Date(newInvoice.billDate) : new Date(),
+            description: `Purchase Invoice ${newInvoice.billNo} from ${newInvoice.supplierName}`,
+            category: "Purchases",
+            amount: newInvoice.total || newInvoice.subtotal,
+            type: "expense",
+            referenceId: `purchase_inv_${newInvoice._id}`
+        });
+
         // Add purchased items to inventory stock
         const InventoryItem = getInventoryModel();
         const stockResults = [];
@@ -192,6 +204,13 @@ router.delete("/:id", verifyToken, async (req, res) => {
         if (!deleted) {
             return res.status(404).json({ message: "Purchase invoice not found" });
         }
+
+        // Remove automated Bookkeeping Entry
+        await removeAutomatedBookkeepingEntry({
+            userId: req.user.id,
+            referenceId: `purchase_inv_${req.params.id}`
+        });
+
         res.json({ message: "Purchase invoice deleted" });
     } catch (error) {
         console.error("Error deleting purchase invoice:", error);

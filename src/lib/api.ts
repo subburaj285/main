@@ -17,12 +17,13 @@ export const API_BASE_URL = getApiUrl();
 
 // API endpoints
 export const API_ENDPOINTS = {
-  // Auth endpoints
+  // Auth & Leads endpoints
   SIGNUP: `${API_BASE_URL}/signup`,
   SIGNUP_TRIAL: `${API_BASE_URL}/signup-trial`,
   SIGNIN: `${API_BASE_URL}/signin`,
   USER: `${API_BASE_URL}/user`,
   UPDATE_PROFILE: `${API_BASE_URL}/user`,
+  LEADS: `${API_BASE_URL}/leads`,
 
   // Payment endpoints
   CREATE_ORDER: `${API_BASE_URL}/create-order`,

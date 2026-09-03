@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, User, Mail, Phone, FileText, CheckCircle2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { X, User, Mail, Phone, FileText, CheckCircle2, AlertCircle } from "lucide-react";
+import { API_ENDPOINTS } from "@/lib/api";
 
 export const TrialFormModal = () => {
-  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [form, setForm] = useState({
@@ -15,56 +14,102 @@ export const TrialFormModal = () => {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
-  // Listen for the global open event dispatched by all CTA buttons
+  // Listen for the global open event dispatched by CTA buttons across the app
   useEffect(() => {
     const handler = () => {
-      navigate("/auth?tab=signup&plan=trial");
+      setIsOpen(true);
+      setSubmitted(false);
+      setApiError(null);
+      setErrors({});
     };
     window.addEventListener("openTrialModal", handler);
     return () => window.removeEventListener("openTrialModal", handler);
-  }, [navigate]);
+  }, []);
 
-  // Lock body scroll when open
+  // Lock body scroll when modal is open
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
     } else {
       document.body.style.overflow = "";
     }
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [isOpen]);
 
-  const close = () => setIsOpen(false);
+  const close = () => {
+    if (loading) return;
+    setIsOpen(false);
+  };
 
   const validate = () => {
     const e: Record<string, string> = {};
     if (!form.fullName.trim()) e.fullName = "Full name is required.";
     if (!form.email.trim()) e.email = "Email address is required.";
-    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = "Enter a valid email.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      e.email = "Enter a valid email address.";
+    }
     if (!form.phone.trim()) e.phone = "Phone number is required.";
     return e;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Prevent duplicate submission while loading
+    if (loading) return;
+
+    setApiError(null);
     const errs = validate();
     if (Object.keys(errs).length) {
       setErrors(errs);
       return;
     }
+
     setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
+
+    try {
+      const response = await fetch(API_ENDPOINTS.LEADS, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fullName: form.fullName.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim(),
+          business: form.business.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setSubmitted(true);
+      } else {
+        setApiError(data.message || "Failed to submit lead request. Please try again.");
+      }
+    } catch (err) {
+      console.error("Lead submission API error:", err);
+      setApiError("Unable to reach the server. Please check your network connection and try again.");
+    } finally {
       setLoading(false);
-      close();
-      navigate("/thank-you");
-    }, 1200);
+    }
   };
 
   const handleChange = (field: string, value: string) => {
-    setForm(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) setErrors(prev => { const n = { ...prev }; delete n[field]; return n; });
+    setForm((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) {
+      setErrors((prev) => {
+        const n = { ...prev };
+        delete n[field];
+        return n;
+      });
+    }
+    if (apiError) setApiError(null);
   };
 
   return (
@@ -78,7 +123,9 @@ export const TrialFormModal = () => {
           transition={{ duration: 0.2 }}
           className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
           style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)" }}
-          onClick={(e) => { if (e.target === e.currentTarget) close(); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) close();
+          }}
         >
           <motion.div
             key="trial-modal-card"
@@ -87,16 +134,20 @@ export const TrialFormModal = () => {
             exit={{ opacity: 0, scale: 0.93, y: 28 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
             className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             {/* Header gradient stripe */}
-            <div className="h-1.5 w-full" style={{ background: "linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6)" }} />
+            <div
+              className="h-1.5 w-full"
+              style={{ background: "linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6)" }}
+            />
 
             <div className="px-7 pt-6 pb-7">
               {/* Close button */}
               <button
                 onClick={close}
-                className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 rounded-full p-1.5 hover:bg-slate-100 transition-colors"
+                disabled={loading}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 rounded-full p-1.5 hover:bg-slate-100 transition-colors disabled:opacity-50"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />
@@ -122,7 +173,7 @@ export const TrialFormModal = () => {
                     </div>
                     <button
                       onClick={close}
-                      className="mt-2 h-11 px-6 rounded-full text-sm font-semibold text-white transition-all"
+                      className="mt-2 h-11 px-6 rounded-full text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98]"
                       style={{ background: "linear-gradient(90deg, #3b82f6, #6366f1)" }}
                     >
                       Close
@@ -134,9 +185,16 @@ export const TrialFormModal = () => {
                     <h2 className="text-2xl font-bold mb-1" style={{ color: "#2563eb" }}>
                       Start Your 14-Day Free Trial
                     </h2>
-                    <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+                    <p className="text-sm text-slate-500 mb-5 leading-relaxed">
                       Fill out the details below, and our team will get you set up with your free trial account immediately.
                     </p>
+
+                    {apiError && (
+                      <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-xs text-red-600 font-medium">
+                        <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
+                        <span>{apiError}</span>
+                      </div>
+                    )}
 
                     <form onSubmit={handleSubmit} noValidate className="space-y-4">
                       {/* Full Name */}
@@ -151,8 +209,9 @@ export const TrialFormModal = () => {
                             type="text"
                             placeholder="John Doe"
                             value={form.fullName}
-                            onChange={e => handleChange("fullName", e.target.value)}
-                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${errors.fullName ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
+                            disabled={loading}
+                            onChange={(e) => handleChange("fullName", e.target.value)}
+                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 ${errors.fullName ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
                           />
                         </div>
                         {errors.fullName && <p className="text-xs text-red-500 mt-1">{errors.fullName}</p>}
@@ -170,8 +229,9 @@ export const TrialFormModal = () => {
                             type="email"
                             placeholder="john@example.com"
                             value={form.email}
-                            onChange={e => handleChange("email", e.target.value)}
-                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${errors.email ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
+                            disabled={loading}
+                            onChange={(e) => handleChange("email", e.target.value)}
+                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 ${errors.email ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
                           />
                         </div>
                         {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email}</p>}
@@ -189,8 +249,9 @@ export const TrialFormModal = () => {
                             type="tel"
                             placeholder="+1 (555) 000-0000"
                             value={form.phone}
-                            onChange={e => handleChange("phone", e.target.value)}
-                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${errors.phone ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
+                            disabled={loading}
+                            onChange={(e) => handleChange("phone", e.target.value)}
+                            className={`w-full pl-10 pr-4 h-12 rounded-xl border text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 ${errors.phone ? "border-red-400 focus:ring-red-100" : "border-slate-200"}`}
                           />
                         </div>
                         {errors.phone && <p className="text-xs text-red-500 mt-1">{errors.phone}</p>}
@@ -199,7 +260,7 @@ export const TrialFormModal = () => {
                       {/* Business Description */}
                       <div>
                         <label className="block text-[11px] font-extrabold text-slate-500 uppercase tracking-widest mb-1.5">
-                          Business Description
+                          Business Description (Optional)
                         </label>
                         <div className="relative">
                           <FileText className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
@@ -207,9 +268,10 @@ export const TrialFormModal = () => {
                             id="trial-business"
                             placeholder="Tell us a bit about your business and accounting needs..."
                             value={form.business}
-                            onChange={e => handleChange("business", e.target.value)}
+                            disabled={loading}
+                            onChange={(e) => handleChange("business", e.target.value)}
                             rows={3}
-                            className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 resize-none"
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-sm bg-slate-50 placeholder:text-slate-400 text-slate-900 outline-none transition-all focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 resize-none disabled:opacity-60"
                           />
                         </div>
                       </div>
@@ -219,7 +281,7 @@ export const TrialFormModal = () => {
                         id="trial-submit-btn"
                         type="submit"
                         disabled={loading}
-                        className="w-full h-12 rounded-full text-white text-sm font-bold tracking-wide transition-all hover:opacity-90 hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-70 flex items-center justify-center gap-2 shadow-lg"
+                        className="w-full h-12 rounded-full text-white text-sm font-bold tracking-wide transition-all hover:opacity-90 hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-70 flex items-center justify-center gap-2 shadow-lg cursor-pointer disabled:cursor-not-allowed"
                         style={{ background: "linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6)" }}
                       >
                         {loading ? (
@@ -228,9 +290,11 @@ export const TrialFormModal = () => {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                             </svg>
-                            Setting up your account...
+                            Submitting...
                           </>
-                        ) : "Get Started Now"}
+                        ) : (
+                          "Get Started Now"
+                        )}
                       </button>
 
                       <p className="text-center text-[11px] text-slate-400 pt-1">

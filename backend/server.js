@@ -38,6 +38,7 @@ import scannedDocRoutes from "./routes/scannedDocRoutes.js";
 import civilEngineeringRoutes from "./routes/civilEngineeringRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import invoiceTemplateRoutes from "./routes/invoiceTemplateRoutes.js";
+import leadRoutes from "./routes/leadRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -1168,6 +1169,7 @@ app.use("/api/scanned-docs", authenticateUser, checkSubscription, checkModuleAcc
 app.use("/api/civil-engineering", authenticateUser, checkSubscription, checkModuleAccess("civil-engineering"), civilEngineeringRoutes);
 app.use("/api/customers", authenticateUser, checkSubscription, checkModuleAccess("invoice"), customerRoutes);
 app.use("/api/invoice-templates", authenticateUser, checkSubscription, checkModuleAccess("invoice"), invoiceTemplateRoutes);
+app.use("/api/leads", leadRoutes);
 
 const seedPlans = async () => {
   const plans = [
