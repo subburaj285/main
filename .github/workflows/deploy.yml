@@ -67,7 +67,13 @@ jobs:
               git fetch origin main
 
               echo 'Resetting to exact deployment commit...'
+              if [ -f .env ]; then cp -p .env /tmp/financial-automation.env; fi
+              if [ -f backend/.env ]; then cp -p backend/.env /tmp/financial-automation-backend.env; fi
+
               git reset --hard \$DEPLOY_SHA
+
+              if [ -f /tmp/financial-automation.env ]; then cp -p /tmp/financial-automation.env .env; fi
+              if [ -f /tmp/financial-automation-backend.env ]; then cp -p /tmp/financial-automation-backend.env backend/.env; fi
 
               CURRENT_SHA=\$(git rev-parse HEAD)
 
