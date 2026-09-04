@@ -27,3 +27,12 @@ dist-ssr
 # Next.js build output/cache
 .next/
 
+
+# Python virtual environment
+backend/venv/
+
+# Environment files
+.env
+.env.*
+backend/.env
+backend/.env.*
