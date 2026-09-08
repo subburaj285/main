@@ -5,6 +5,8 @@ const router = express.Router();
 
 // ✅ Define Balance Sheet Schema - Updated to match Python file structure
 const balanceSheetSchema = new mongoose.Schema({
+  companyName: { type: String },
+  financialYear: { type: String },
   // Assets
   currentAssets: { type: Number, required: true, default: 0 },
   nonCurrentAssets: { type: Number, required: true, default: 0 },
@@ -21,6 +23,17 @@ const balanceSheetSchema = new mongoose.Schema({
   // Results
   totalLiabilitiesEquity: { type: Number, required: true, default: 0 },
   balanced: { type: Boolean, default: false },
+  breakdown: {
+    assets: {
+      currentAssets: [{ label: String, value: Number }],
+      nonCurrentAssets: [{ label: String, value: Number }],
+    },
+    liabilities: {
+      currentLiabilities: [{ label: String, value: Number }],
+      nonCurrentLiabilities: [{ label: String, value: Number }],
+    },
+    equity: [{ label: String, value: Number }],
+  },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -33,6 +46,8 @@ router.post("/add", async (req, res) => {
 
     // Fill missing fields with 0 to avoid validation errors
     const dataToSave = {
+      companyName: balanceData.companyName || "",
+      financialYear: balanceData.financialYear || "",
       // Assets
       currentAssets: balanceData.currentAssets || 0,
       nonCurrentAssets: balanceData.nonCurrentAssets || 0,
@@ -49,6 +64,11 @@ router.post("/add", async (req, res) => {
       // Results
       totalLiabilitiesEquity: balanceData.totalLiabilitiesEquity || 0,
       balanced: balanceData.balanced || false,
+      breakdown: balanceData.breakdown || {
+        assets: { currentAssets: [], nonCurrentAssets: [] },
+        liabilities: { currentLiabilities: [], nonCurrentLiabilities: [] },
+        equity: [],
+      },
     };
 
     const newBalance = new BalanceSheet(dataToSave);

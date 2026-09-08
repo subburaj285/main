@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { VoiceButton } from "@/components/ui/VoiceButton";
@@ -65,6 +66,7 @@ interface PurchaseItem {
     id: string;
     itemName: string;
     itemCode: string;
+    codeType: 'HSN' | 'SAC';
     hsnCode: string;
     quantity: number;
     unit: string;
@@ -86,11 +88,18 @@ interface PurchaseItem {
 
 interface PurchaseInvoice {
     type: 'purchase';
+    customerType: 'B2B' | 'B2C';
+    customerName: string;
+    customerPhone: string;
+    customerGstin: string;
     supplierName: string;
     phone: string;
     gstin: string;
     billNo: string;
     billDate: string;
+    paymentMethod: 'Cash' | 'Credit' | 'G Pay' | 'Net Banking';
+    invoiceSize: 'A4' | 'A5';
+    invoiceFormat: 'Supermarket' | 'Hotel' | 'Stationery Shop';
     stateOfSupply: string;
     businessState: string;
     items: PurchaseItem[];
@@ -145,6 +154,9 @@ const Inventory = () => {
     // GST Rate Options
     const GST_SLABS = ["0", "5", "12", "18", "28"];
     const UNITS = ["Pcs", "Kg", "Ltr", "Mtr", "Box", "Dozen", "Pair", "Set", "Nos"];
+    const PAYMENT_METHODS: PurchaseInvoice["paymentMethod"][] = ["Cash", "Credit", "G Pay", "Net Banking"];
+    const INVOICE_SIZES: PurchaseInvoice["invoiceSize"][] = ["A4", "A5"];
+    const INVOICE_FORMATS: PurchaseInvoice["invoiceFormat"][] = ["Supermarket", "Hotel", "Stationery Shop"];
 
     // Form State
     const [formData, setFormData] = useState({
@@ -159,22 +171,65 @@ const Inventory = () => {
         stateOfSupply: ""
     });
 
-    // Purchase Invoice State
-    const generatePurchaseNo = () => {
-        const date = new Date();
-        const year = date.getFullYear().toString().slice(-2);
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-        return `PUR-${year}${month}-${random}`;
+    const [purchaseInvoices, setPurchaseInvoices] = useState<PurchaseInvoice[]>([]);
+
+    const generatePurchaseNo = (invoicesList: PurchaseInvoice[] = purchaseInvoices) => {
+        const prefix = 'PUR';
+        let next = 1;
+        if (invoicesList && invoicesList.length > 0) {
+            const matchingNos = invoicesList
+                .filter(inv => inv.billNo && inv.billNo.startsWith(`${prefix}-`))
+                .map(inv => {
+                    const parts = inv.billNo.split('-');
+                    const numStr = parts[parts.length - 1];
+                    const num = parseInt(numStr, 10);
+                    return isNaN(num) ? 0 : num;
+                });
+            if (matchingNos.length > 0) {
+                next = Math.max(...matchingNos) + 1;
+            }
+        }
+        return `${prefix}-${String(next).padStart(5, '0')}`;
+    };
+
+    const fetchPurchaseInvoices = async () => {
+        try {
+            const token = localStorage.getItem("token");
+            const res = await fetch(`${API_BASE_URL}/purchase-invoice/all`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const fetched = data.invoices || [];
+                setPurchaseInvoices(fetched);
+                setPurchaseInvoice(prev => {
+                    if (!prev.billNo || prev.billNo.startsWith('INV-')) {
+                        return { ...prev, billNo: generatePurchaseNo(fetched) };
+                    }
+                    return prev;
+                });
+                return fetched;
+            }
+        } catch (error) {
+            console.error("Error fetching purchase invoices:", error);
+        }
+        return [];
     };
 
     const [purchaseInvoice, setPurchaseInvoice] = useState<PurchaseInvoice>({
         type: 'purchase',
+        customerType: 'B2C',
+        customerName: '',
+        customerPhone: '',
+        customerGstin: '',
         supplierName: '',
         phone: '',
         gstin: '',
-        billNo: generatePurchaseNo(),
+        billNo: '',
         billDate: new Date().toISOString().split('T')[0],
+        paymentMethod: 'Cash',
+        invoiceSize: 'A4',
+        invoiceFormat: 'Supermarket',
         stateOfSupply: '',
         businessState: BUSINESS_STATE,
         items: [],
@@ -191,6 +246,7 @@ const Inventory = () => {
     const [purchaseNewItem, setPurchaseNewItem] = useState<Partial<PurchaseItem>>({
         itemName: '',
         itemCode: '',
+        codeType: 'HSN',
         hsnCode: '',
         quantity: 1,
         unit: 'Pcs',
@@ -208,6 +264,42 @@ const Inventory = () => {
         return supplierState !== '' && BUSINESS_STATE !== '' && supplierState !== BUSINESS_STATE;
     };
 
+    const findInventoryMatch = (itemName = '', itemCode = '') => {
+        const normalizedName = itemName.trim().toLowerCase();
+        const normalizedCode = itemCode.trim().toLowerCase();
+
+        return items.find(item => {
+            const itemSku = item.sku?.trim().toLowerCase();
+            const existingName = item.itemName?.trim().toLowerCase();
+            return (normalizedCode && itemSku === normalizedCode) || (normalizedName && existingName === normalizedName);
+        });
+    };
+
+    const applyHsnSacAutomation = (field: 'itemName' | 'itemCode', value: string) => {
+        setPurchaseNewItem(prev => {
+            const next = { ...prev, [field]: value };
+            const matchedItem = findInventoryMatch(
+                field === 'itemName' ? value : next.itemName,
+                field === 'itemCode' ? value : next.itemCode
+            );
+
+            if (matchedItem?.hsnCode && !next.hsnCode) {
+                next.hsnCode = matchedItem.hsnCode;
+                next.codeType = 'HSN';
+            }
+
+            if (matchedItem?.gstRate !== undefined && matchedItem.gstRate !== null) {
+                next.taxPercent = matchedItem.gstRate;
+            }
+
+            if (matchedItem?.unit) {
+                next.unit = matchedItem.unit;
+            }
+
+            return next;
+        });
+    };
+
     const calculatePurchaseItemAmounts = (item: Partial<PurchaseItem>): Partial<PurchaseItem> => {
         const qty = item.quantity || 0;
         const price = item.pricePerUnit || 0;
@@ -215,9 +307,9 @@ const Inventory = () => {
         const taxPct = item.taxPercent || 0;
         const priceWithTax = item.priceWithTax || false;
 
-        let baseAmount = qty * price;
-        let discountAmount = (baseAmount * discountPct) / 100;
-        let afterDiscount = baseAmount - discountAmount;
+        const baseAmount = qty * price;
+        const discountAmount = (baseAmount * discountPct) / 100;
+        const afterDiscount = baseAmount - discountAmount;
 
         const isInterState = isInterStatePurchase();
 
@@ -303,6 +395,7 @@ const Inventory = () => {
             id: `pur-item-${Date.now()}`,
             itemName: purchaseNewItem.itemName || '',
             itemCode: purchaseNewItem.itemCode || '',
+            codeType: purchaseNewItem.codeType || 'HSN',
             hsnCode: purchaseNewItem.hsnCode || '',
             quantity: purchaseNewItem.quantity || 1,
             unit: purchaseNewItem.unit || 'Pcs',
@@ -335,6 +428,7 @@ const Inventory = () => {
         setPurchaseNewItem({
             itemName: '',
             itemCode: '',
+            codeType: 'HSN',
             hsnCode: '',
             quantity: 1,
             unit: 'Pcs',
@@ -367,6 +461,14 @@ const Inventory = () => {
             toast.error("Please enter supplier name");
             return;
         }
+        if (!purchaseInvoice.customerName.trim()) {
+            toast.error("Please enter customer name for Bill To");
+            return;
+        }
+        if (purchaseInvoice.customerType === 'B2B' && !purchaseInvoice.customerGstin.trim()) {
+            toast.error("Please enter customer GSTIN for B2B invoice");
+            return;
+        }
 
         setIsPurchaseSaving(true);
         try {
@@ -393,6 +495,7 @@ const Inventory = () => {
                 toast.success(msg);
                 setLastSavedPurchaseId(data.invoice?._id || null);
                 fetchItems(); // Refresh inventory items list
+                fetchPurchaseInvoices(); // Refresh purchase invoices list to update sequence
             } else {
                 const data = await res.json();
                 toast.error(data.message || "Failed to save purchase invoice");
@@ -408,11 +511,18 @@ const Inventory = () => {
     const resetPurchaseForm = () => {
         setPurchaseInvoice({
             type: 'purchase',
+            customerType: 'B2C',
+            customerName: '',
+            customerPhone: '',
+            customerGstin: '',
             supplierName: '',
             phone: '',
             gstin: '',
             billNo: generatePurchaseNo(),
             billDate: new Date().toISOString().split('T')[0],
+            paymentMethod: 'Cash',
+            invoiceSize: 'A4',
+            invoiceFormat: 'Supermarket',
             stateOfSupply: '',
             businessState: BUSINESS_STATE,
             items: [],
@@ -446,9 +556,16 @@ const Inventory = () => {
         let csvContent = "PURCHASE INVOICE DETAILS\n";
         if (purchaseInvoice.billNo) csvContent += `Bill No,${purchaseInvoice.billNo}\n`;
         if (purchaseInvoice.billDate) csvContent += `Bill Date,${purchaseInvoice.billDate}\n`;
+        csvContent += `Invoice Size,${purchaseInvoice.invoiceSize}\n`;
+        csvContent += `Invoice Format,${purchaseInvoice.invoiceFormat}\n`;
+        csvContent += `Payment Method,${purchaseInvoice.paymentMethod}\n`;
+        csvContent += `Customer Type,${purchaseInvoice.customerType}\n`;
+        if (purchaseInvoice.customerName) csvContent += `Customer Name,${esc(purchaseInvoice.customerName)}\n`;
+        if (purchaseInvoice.customerPhone) csvContent += `Customer Phone,${purchaseInvoice.customerPhone}\n`;
+        if (purchaseInvoice.customerType === 'B2B' && purchaseInvoice.customerGstin) csvContent += `Customer GSTIN,${purchaseInvoice.customerGstin}\n`;
         if (purchaseInvoice.supplierName) csvContent += `Supplier Name,${esc(purchaseInvoice.supplierName)}\n`;
         if (purchaseInvoice.phone) csvContent += `Phone,${purchaseInvoice.phone}\n`;
-        if (purchaseInvoice.gstin) csvContent += `GSTIN,${purchaseInvoice.gstin}\n`;
+        if (purchaseInvoice.gstin) csvContent += `Supplier GSTIN,${purchaseInvoice.gstin}\n`;
         if (purchaseInvoice.stateOfSupply) csvContent += `State of Supply,${purchaseInvoice.stateOfSupply}\n`;
         if (purchaseInvoice.businessState) csvContent += `Business State,${purchaseInvoice.businessState}\n`;
         csvContent += "\n";
@@ -457,7 +574,7 @@ const Inventory = () => {
         csvContent += "ITEMS\n";
         const cols: string[] = ['Item Name'];
         if (anyCode) cols.push('Item Code');
-        if (anyHSN) cols.push('HSN Code');
+        if (anyHSN) cols.push('Code Type', 'HSN/SAC Code');
         cols.push('Quantity', 'Unit', 'Price');
         if (anyDiscount) cols.push('Discount');
         if (anyTax) cols.push('Tax %', 'Tax Amt');
@@ -467,7 +584,7 @@ const Inventory = () => {
         items.forEach(item => {
             const row: string[] = [esc(item.itemName)];
             if (anyCode) row.push(esc(item.itemCode || ''));
-            if (anyHSN) row.push(esc(item.hsnCode || ''));
+            if (anyHSN) row.push(item.codeType || 'HSN', esc(item.hsnCode || ''));
             row.push(String(item.quantity), esc(item.unit), String(item.pricePerUnit));
             if (anyDiscount) row.push(String(item.discountAmount));
             if (anyTax) {
@@ -524,7 +641,12 @@ const Inventory = () => {
 
         const details = `Purchase Invoice: ${purchaseInvoice.billNo}
 Date: ${purchaseInvoice.billDate}
-Supplier: ${purchaseInvoice.supplierName}
+Format: ${purchaseInvoice.invoiceSize} - ${purchaseInvoice.invoiceFormat}
+Payment Method: ${purchaseInvoice.paymentMethod}
+Bill To: ${purchaseInvoice.customerName}
+Customer Type: ${purchaseInvoice.customerType}
+Customer Phone: ${purchaseInvoice.customerPhone || '-'}
+${purchaseInvoice.customerType === 'B2B' ? `Customer GSTIN: ${purchaseInvoice.customerGstin || '-'}\n` : ''}Supplier: ${purchaseInvoice.supplierName}
 Phone: ${purchaseInvoice.phone}
 GSTIN: ${purchaseInvoice.gstin}
 
@@ -552,22 +674,23 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
             return;
         }
 
-        const supplierName = purchaseInvoice.supplierName || 'Supplier';
-        const shareLink = `${window.location.origin}/purchase-invoice/view/${lastSavedPurchaseId}`;
+        const customerName = purchaseInvoice.customerName || 'Valued Customer';
+        const sellerName = purchaseInvoice.supplierName || 'SHREE ANDAL AI SOFTWARE SOLUTIONS (OPC) PRIVATE LIMITED';
+        const shareLink = `https://software.saaiss.in/purchase-invoice/view/${lastSavedPurchaseId}`;
 
         let message = `*PURCHASE INVOICE: ${purchaseInvoice.billNo}*\n`;
         message += `__________________________\n\n`;
-        message += `Dear *${supplierName}*,\n\n`;
-        message += `A purchase invoice has been recorded for your recent transaction.\n\n`;
+        message += `Dear *${customerName}*,\n\n`;
+        message += `A new invoice has been generated for your recent transaction with *${sellerName}*.\n\n`;
         message += `*Bill Summary:*\n`;
-        message += `• Bill No: #${purchaseInvoice.billNo}\n`;
+        message += `• Invoice ID: #${purchaseInvoice.billNo}\n`;
         message += `• Date: ${purchaseInvoice.billDate}\n`;
         message += `• Total Amount: ₹${purchaseInvoice.total.toFixed(2)}\n\n`;
-        message += `You can view the full invoice details using the link below:\n`;
+        message += `You can view, download, or pay your invoice online using the secure link below:\n`;
         message += `🔗 ${shareLink}\n\n`;
-        if (purchaseInvoice.balance > 0) {
-            message += `Balance Due: ₹${purchaseInvoice.balance.toFixed(2)}\n\n`;
-        }
+        message += `If you have any questions regarding this invoice, please feel free to reach out to us.\n\n`;
+        message += `Best regards,\n`;
+        message += `*${sellerName}*\n`;
         message += `__________________________\n`;
         message += `_Powered by Sri Andal Financial Automation_`;
 
@@ -594,6 +717,8 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
             } else {
                 fetchSales();
             }
+        } else if (activeTab === "purchase") {
+            fetchPurchaseInvoices();
         }
     }, [activeTab, activeSubTab]);
 
@@ -960,53 +1085,48 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
     };
 
     return (
-        <div className="min-h-screen bg-slate-900 text-white overflow-hidden relative">
-            {/* Background elements */}
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute inset-0 bg-[linear-gradient(rgba(139,92,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(139,92,246,0.03)_1px,transparent_1px)] bg-[size:100px_100px]" />
-                <div className="absolute top-20 left-20 w-2 h-2 bg-violet-400 rounded-full animate-ping" />
-                <div className="absolute bottom-40 right-40 w-2 h-2 bg-purple-400 rounded-full animate-ping" style={{ animationDelay: '1s' }} />
-            </div>
+        <div className="liquid-page module-ink min-h-screen overflow-hidden text-slate-950">
+            <div className="liquid-backdrop fixed inset-0 pointer-events-none" />
 
             {/* Header */}
-            <header className="relative backdrop-blur-xl bg-white/5 border-b border-violet-400/20 shadow-2xl">
-                <div className="max-w-7xl mx-auto px-6 py-6">
+            <header className="sticky top-0 z-20 border-b border-white/40 bg-white/24 backdrop-blur-2xl">
+                <div className="mx-auto max-w-7xl px-6 py-6">
                     <Button
                         variant="ghost"
                         onClick={handleBackToDashboard}
-                        className="mb-4 text-violet-200 hover:text-violet-100 hover:bg-white/10"
+                        className="mb-4 rounded-full border border-white/60 bg-white/45 text-slate-700 hover:bg-white/70 hover:text-slate-950"
                     >
                         <ArrowLeft className="mr-2 h-4 w-4" />
                         Back to Dashboard
                     </Button>
                     <div className="flex items-center gap-4">
-                        <div className="p-3 bg-gradient-to-br from-violet-500/20 to-purple-500/20 rounded-2xl border border-violet-400/30">
-                            <Package className="h-8 w-8 text-violet-400" />
+                        <div className="liquid-icon flex h-16 w-16 items-center justify-center rounded-[22px]">
+                            <Package className="h-8 w-8 text-slate-900" />
                         </div>
                         <div>
-                            <h1 className="text-4xl font-black bg-gradient-to-r from-violet-400 to-purple-400 bg-clip-text text-transparent">
+                            <h1 className="text-4xl font-semibold tracking-tight text-slate-950">
                                 Inventory Management
                             </h1>
-                            <p className="text-violet-200/80 font-medium mt-1">Track stock, manage items, and monitor assets</p>
+                            <p className="mt-1 text-slate-600">Track stock, manage items, and monitor assets</p>
                         </div>
                     </div>
                 </div>
             </header>
 
             {/* Main Content */}
-            <main className="max-w-7xl mx-auto px-6 py-12 relative z-10">
+            <main className="relative z-10 mx-auto max-w-7xl px-6 py-12">
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
-                    <TabsList className="grid w-full grid-cols-4 backdrop-blur-2xl bg-white/10 border border-violet-400/20 rounded-2xl p-1">
-                        <TabsTrigger value="items" className="data-[state=active]:bg-violet-600 data-[state=active]:text-white rounded-xl">
+                    <TabsList className="grid w-full grid-cols-4 rounded-[24px] border border-white/55 bg-white/42 p-1 shadow-[0_16px_42px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+                        <TabsTrigger value="items" className="rounded-[18px] text-slate-600 data-[state=active]:bg-slate-950 data-[state=active]:text-white">
                             <Archive className="h-4 w-4 mr-2" /> Items
                         </TabsTrigger>
-                        <TabsTrigger value="add" className="data-[state=active]:bg-violet-600 data-[state=active]:text-white rounded-xl">
+                        <TabsTrigger value="add" className="rounded-[18px] text-slate-600 data-[state=active]:bg-slate-950 data-[state=active]:text-white">
                             <Plus className="h-4 w-4 mr-2" /> Add Item
                         </TabsTrigger>
-                        <TabsTrigger value="purchase" className="data-[state=active]:bg-amber-600 data-[state=active]:text-white rounded-xl">
+                        <TabsTrigger value="purchase" className="rounded-[18px] text-slate-600 data-[state=active]:bg-slate-950 data-[state=active]:text-white">
                             <ShoppingCart className="h-4 w-4 mr-2" /> Purchase
                         </TabsTrigger>
-                        <TabsTrigger value="voice" className="data-[state=active]:bg-violet-600 data-[state=active]:text-white rounded-xl">
+                        <TabsTrigger value="voice" className="rounded-[18px] text-slate-600 data-[state=active]:bg-slate-950 data-[state=active]:text-white">
                             <Mic className="h-4 w-4 mr-2" /> Voice
                         </TabsTrigger>
                     </TabsList>
@@ -1513,6 +1633,111 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
                                         <CardDescription className="text-amber-300/70">Enter supplier details and add items</CardDescription>
                                     </CardHeader>
                                     <CardContent className="space-y-4">
+                                        <div className="rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4">
+                                            <div className="mb-4 flex items-center justify-between gap-3">
+                                                <div>
+                                                    <h3 className="text-lg font-bold text-amber-100">Buyer / Customer Details</h3>
+                                                    <p className="text-xs text-amber-300/70">Used in the Bill To section of the invoice copy</p>
+                                                </div>
+                                                <Select
+                                                    value={purchaseInvoice.customerType}
+                                                    onValueChange={(val: 'B2B' | 'B2C') => setPurchaseInvoice(prev => ({
+                                                        ...prev,
+                                                        customerType: val,
+                                                        customerGstin: val === 'B2C' ? '' : prev.customerGstin,
+                                                    }))}
+                                                >
+                                                    <SelectTrigger className="w-[120px] bg-white/5 border-amber-400/30 text-amber-100">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent className="bg-slate-900 border-amber-400/20 text-white">
+                                                        <SelectItem value="B2B">B2B</SelectItem>
+                                                        <SelectItem value="B2C">B2C</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-4">
+                                                <div className="space-y-2">
+                                                    <Label className="text-amber-100">Customer Name *</Label>
+                                                    <Input
+                                                        value={purchaseInvoice.customerName}
+                                                        onChange={(e) => setPurchaseInvoice(prev => ({ ...prev, customerName: e.target.value }))}
+                                                        className="bg-white/5 border-amber-400/30 text-amber-100"
+                                                        placeholder="Customer name"
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label className="text-amber-100">Phone Number</Label>
+                                                    <Input
+                                                        value={purchaseInvoice.customerPhone}
+                                                        onChange={(e) => setPurchaseInvoice(prev => ({ ...prev, customerPhone: e.target.value }))}
+                                                        className="bg-white/5 border-amber-400/30 text-amber-100"
+                                                        placeholder="Customer phone"
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label className="text-amber-100">GSTIN {purchaseInvoice.customerType === 'B2B' ? '*' : '(optional)'}</Label>
+                                                    <Input
+                                                        value={purchaseInvoice.customerGstin}
+                                                        onChange={(e) => setPurchaseInvoice(prev => ({ ...prev, customerGstin: e.target.value.toUpperCase() }))}
+                                                        className="bg-white/5 border-amber-400/30 text-amber-100"
+                                                        placeholder={purchaseInvoice.customerType === 'B2B' ? "Customer GSTIN" : "Optional for B2C"}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-3 gap-4">
+                                            <div className="space-y-2">
+                                                <Label className="text-amber-100">Payment Method</Label>
+                                                <Select
+                                                    value={purchaseInvoice.paymentMethod}
+                                                    onValueChange={(val: PurchaseInvoice["paymentMethod"]) => setPurchaseInvoice(prev => ({ ...prev, paymentMethod: val }))}
+                                                >
+                                                    <SelectTrigger className="bg-white/5 border-amber-400/30 text-amber-100">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent className="bg-slate-900 border-amber-400/20 text-white">
+                                                        {PAYMENT_METHODS.map(method => (
+                                                            <SelectItem key={method} value={method}>{method}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-amber-100">Invoice Size</Label>
+                                                <Select
+                                                    value={purchaseInvoice.invoiceSize}
+                                                    onValueChange={(val: PurchaseInvoice["invoiceSize"]) => setPurchaseInvoice(prev => ({ ...prev, invoiceSize: val }))}
+                                                >
+                                                    <SelectTrigger className="bg-white/5 border-amber-400/30 text-amber-100">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent className="bg-slate-900 border-amber-400/20 text-white">
+                                                        {INVOICE_SIZES.map(size => (
+                                                            <SelectItem key={size} value={size}>{size}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-amber-100">Invoice Format</Label>
+                                                <Select
+                                                    value={purchaseInvoice.invoiceFormat}
+                                                    onValueChange={(val: PurchaseInvoice["invoiceFormat"]) => setPurchaseInvoice(prev => ({ ...prev, invoiceFormat: val }))}
+                                                >
+                                                    <SelectTrigger className="bg-white/5 border-amber-400/30 text-amber-100">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent className="bg-slate-900 border-amber-400/20 text-white">
+                                                        {INVOICE_FORMATS.map(format => (
+                                                            <SelectItem key={format} value={format}>{format}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="space-y-2">
                                                 <Label className="text-amber-100">Supplier Name *</Label>
@@ -1610,7 +1835,7 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
                                                 <Label className="text-amber-100">Item Name *</Label>
                                                 <Input
                                                     value={purchaseNewItem.itemName}
-                                                    onChange={(e) => setPurchaseNewItem(prev => ({ ...prev, itemName: e.target.value }))}
+                                                    onChange={(e) => applyHsnSacAutomation('itemName', e.target.value)}
                                                     className="bg-white/5 border-amber-400/30 text-amber-100"
                                                     placeholder="Item name"
                                                 />
@@ -1619,19 +1844,33 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
                                                 <Label className="text-amber-100">Item Code</Label>
                                                 <Input
                                                     value={purchaseNewItem.itemCode}
-                                                    onChange={(e) => setPurchaseNewItem(prev => ({ ...prev, itemCode: e.target.value }))}
+                                                    onChange={(e) => applyHsnSacAutomation('itemCode', e.target.value)}
                                                     className="bg-white/5 border-amber-400/30 text-amber-100"
                                                     placeholder="SKU / Code"
                                                 />
                                             </div>
                                             <div className="space-y-2">
-                                                <Label className="text-amber-100">HSN Code</Label>
-                                                <Input
-                                                    value={purchaseNewItem.hsnCode}
-                                                    onChange={(e) => setPurchaseNewItem(prev => ({ ...prev, hsnCode: e.target.value }))}
-                                                    className="bg-white/5 border-amber-400/30 text-amber-100"
-                                                    placeholder="HSN"
-                                                />
+                                                <Label className="text-amber-100">HSN / SAC Code</Label>
+                                                <div className="grid grid-cols-[92px_1fr] gap-2">
+                                                    <Select
+                                                        value={purchaseNewItem.codeType || 'HSN'}
+                                                        onValueChange={(val: 'HSN' | 'SAC') => setPurchaseNewItem(prev => ({ ...prev, codeType: val }))}
+                                                    >
+                                                        <SelectTrigger className="bg-white/5 border-amber-400/30 text-amber-100">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent className="bg-slate-900 border-amber-400/20 text-white">
+                                                            <SelectItem value="HSN">HSN</SelectItem>
+                                                            <SelectItem value="SAC">SAC</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                    <Input
+                                                        value={purchaseNewItem.hsnCode}
+                                                        onChange={(e) => setPurchaseNewItem(prev => ({ ...prev, hsnCode: e.target.value }))}
+                                                        className="bg-white/5 border-amber-400/30 text-amber-100"
+                                                        placeholder={purchaseNewItem.codeType === 'SAC' ? "SAC code" : "Auto/manual HSN"}
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
                                         <div className="grid grid-cols-4 gap-4">
@@ -1767,7 +2006,7 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
                                                                 <td className="py-2 px-2">
                                                                     <div className="text-amber-100 font-medium">{item.itemName}</div>
                                                                     <div className="text-amber-300/50 text-xs">
-                                                                        {item.itemCode && `${item.itemCode} • `}{item.hsnCode && `HSN: ${item.hsnCode}`}
+                                                                        {item.itemCode && `${item.itemCode} • `}{item.hsnCode && `${item.codeType || 'HSN'}: ${item.hsnCode}`}
                                                                     </div>
                                                                 </td>
                                                                 <td className="py-2 px-2 text-right text-amber-100">{item.quantity} {item.unit}</td>
@@ -2063,6 +2302,12 @@ Balance: ${purchaseInvoice.balance.toFixed(2)}`;
                     </AlertDialogContent>
                 </AlertDialog>
             </main>
+
+            <div className="mt-8 text-center">
+                <p className="text-slate-500 text-sm backdrop-blur-md inline-block px-6 py-2 rounded-full border border-white/40 bg-white/30">
+                    Powered by SHREE ANDAL AI SOFTWARE SOLUTIONS (OPC) PRIVATE LIMITED ✨
+                </p>
+            </div>
         </div>
     );
 };
